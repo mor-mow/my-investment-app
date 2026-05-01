@@ -55,56 +55,62 @@ def run_simulation():
         int((exp_3_age - current_age) * 12): exp_3_v
     }
     
-    for month in range(1, (end_age - current_age) * 12 + 1):
-        age = current_age + (month / 12)
-        current_rate = fixed_rate if is_simple_rate else (rate_1 if age <= change_rate_age_1 else rate_2 if age <= change_rate_age_2 else rate_3)
+    # 運用月数を計算
+    total_months = int((end_age - current_age) * 12)
+    
+    for month_idx in range(1, total_months + 1):
+        # 現在の年齢と「その年の何ヶ月目か」を計算
+        elapsed_years = (month_idx - 1) // 12
+        display_age = current_age + elapsed_years
+        display_month = (month_idx - 1) % 12 + 1
         
-        expense = special_expenses.get(month, 0)
+        # 利率決定
+        current_rate = fixed_rate if is_simple_rate else (rate_1 if display_age <= change_rate_age_1 else rate_2 if display_age <= change_rate_age_2 else rate_3)
+        
+        # 臨時出費
+        expense = special_expenses.get(month_idx, 0)
         balance = max(0, balance - expense)
         
         monthly_cashflow = 0
-        if age > start_withdrawal_age:
+        if display_age >= start_withdrawal_age:
             if withdrawal_type == "定額 (円)":
                 monthly_cashflow = -monthly_withdrawal_amount
             else:
                 monthly_cashflow = -(balance * annual_withdrawal_rate) / 12
             action_name = "取り崩し"
         else:
-            monthly_cashflow = monthly_deposit_1 if age <= change_deposit_age else monthly_deposit_2
+            monthly_cashflow = monthly_deposit_1 if display_age < change_deposit_age else monthly_deposit_2
             cumulative_investment += monthly_cashflow
             action_name = "積立"
             
         balance = max(0, balance + monthly_cashflow) * (1 + current_rate / 12)
         
         data.append({
-            "年齢": round(age, 1),
-            "資産残高": int(balance),
-            "投資元本": int(cumulative_investment),
+            "年齢": display_age,
+            "月": f"{display_month}ヶ月目",
+            "区分": action_name,
             "月間収支": int(monthly_cashflow),
             "臨時出費": int(expense),
-            "区分": action_name
+            "投資元本": int(cumulative_investment),
+            "資産残高": int(balance)
         })
-        if balance <= 0 and age > start_withdrawal_age:
+        
+        if balance <= 0 and display_age >= start_withdrawal_age:
             break
+            
     return pd.DataFrame(data)
 
-# --- メイン表示エリアの制御 ---
-# 入力があるかチェック
-has_input = (initial_investment > 0 or monthly_deposit_1 > 0 or monthly_deposit_2 > 0)
-
+# --- 表示エリア ---
 if not has_input:
-    st.info("👈 左側のメニューから、現在の一括投資額や毎月の積立額を入力してください。シミュレーションが開始されます。")
-    # 入力待ちの時はダミーの空グラフを表示させておくことも可能ですが、ここでは案内のみ。
+    st.info("👈 左側のメニューから設定を入力してください。")
 else:
     df = run_simulation()
-    final_bal = df.iloc[-1]['資産残高']
+    # ...（中略：メトリクスとグラフ表示）...
     
-    st.metric(label=f"{end_age}歳時点の予想資産", value=f"¥{final_bal:,}")
-    
-    if final_bal <= 0 and df.iloc[-1]['年齢'] < end_age:
-        st.error(f"⚠️ {df.iloc[-1]['年齢']}歳で資産がなくなります")
-
-    st.line_chart(df.set_index("年齢")["資産残高"], height=300)
-
-    with st.expander("📊 月ごとの詳細データ（元本推移・収支）"):
-        st.dataframe(df[["年齢", "区分", "月間収支", "臨時出費", "投資元本", "資産残高"]], use_container_width=True)
+    with st.expander("📊 月ごとの詳細データ（全期間を表示）"):
+        # 列の順番を整理して表示
+        st.dataframe(
+            df[["年齢", "月", "区分", "月間収支", "臨時出費", "投資元本", "資産残高"]], 
+            use_container_width=True,
+            hide_index=True # インデックスを隠してスッキリさせる
+        )
