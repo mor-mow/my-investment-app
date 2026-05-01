@@ -1,10 +1,11 @@
 import streamlit as st
 import pandas as pd
 
-# 1. ページ基本設定
+# 1. ページ基本設定（画面幅の自動調整を有効化）
 st.set_page_config(page_title="資産シミュレーター", layout="centered")
 
-st.title("📱 ライフプラン・シミュレーター")
+# タイトルをコンパクト（h3サイズ）に表示
+st.markdown("### 📱 資産シミュレーター") 
 
 # --- 2. サイドバー設定エリア ---
 st.sidebar.header("⚙️ 基本設定")
@@ -60,23 +61,19 @@ def run_simulation():
     total_months = int((end_age - current_age) * 12)
     
     for month_idx in range(1, total_months + 1):
-        # グラフを滑らかにするため小数点単位の年齢を計算
         precise_age = current_age + (month_idx / 12)
         display_age = int(current_age + (month_idx - 1) // 12)
         display_month = (month_idx - 1) % 12 + 1
         
-        # 利率決定
         if is_simple_rate:
             annual_rate = fixed_rate
         else:
             annual_rate = rate_1 if precise_age <= change_rate_age_1 else rate_2 if precise_age <= change_rate_age_2 else rate_3
         monthly_rate = annual_rate / 12
             
-        # 臨時出費
         expense = special_expenses.get(month_idx, 0)
         balance = max(0, balance - expense)
         
-        # 収支計算
         monthly_cashflow = 0
         if precise_age > start_withdrawal_age:
             if withdrawal_type == "定額 (円)":
@@ -89,7 +86,6 @@ def run_simulation():
             cumulative_investment += monthly_cashflow
             action_name = "積立"
             
-        # 複利更新
         balance = max(0, balance + monthly_cashflow) * (1 + monthly_rate)
         
         data.append({
@@ -102,10 +98,8 @@ def run_simulation():
             "投資元本": int(cumulative_investment),
             "資産残高": int(balance)
         })
-        
         if balance <= 0 and precise_age > start_withdrawal_age:
             break
-            
     return pd.DataFrame(data)
 
 # --- 4. メイン画面の表示制御 ---
@@ -117,15 +111,20 @@ else:
     df = run_simulation()
     final_bal = df.iloc[-1]['資産残高']
     
-    st.metric(label=f"{end_age}歳時点の予想資産", value=f"¥{final_bal:,}")
-    
-    if final_bal <= 0 and df.iloc[-1]['年齢（グラフ）'] < end_age:
-        st.error(f"⚠️ {int(df.iloc[-1]['年齢（グラフ）'])}歳で資産がなくなります")
+    # 画面幅に応じてメトリクスを配置
+    col1, col2 = st.columns([1, 1])
+    with col1:
+        st.metric(label=f"{end_age}歳時点の予想資産", value=f"¥{final_bal:,}")
+    with col2:
+        if final_bal <= 0:
+            st.error(f"⚠️ {int(df.iloc[-1]['年齢（グラフ）'])}歳で資産がなくなります")
+        else:
+            st.success("✅ シミュレーション完了")
 
-    # グラフの横軸に小数点年齢を使うことでガタガタを解消
-    st.line_chart(df.set_index("年齢（グラフ）")["資産残高"], height=350)
+    # グラフの幅を自動調整
+    st.line_chart(df.set_index("年齢（グラフ）")["資産残高"], height=350, use_container_width=True)
 
-    with st.expander("📊 月ごとの詳細データ"):
+    with st.expander("📊 月ごとの詳細データ（全期間）"):
         st.dataframe(
             df[["年齢", "月", "区分", "月間収支", "臨時出費", "投資元本", "資産残高"]], 
             use_container_width=True,
