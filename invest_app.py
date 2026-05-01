@@ -1,46 +1,50 @@
 import streamlit as st
 import pandas as pd
 
-st.title("ライフプラン・資産運用シミュレーター")
+st.title("ライフプラン・資産運用シミュレーター Pro")
 
 # --- サイドバーで設定 ---
 st.sidebar.header("1. 基本設定")
 current_age = st.sidebar.number_input("現在の年齢", value=30, min_value=0, max_value=100)
-end_age = st.sidebar.slider("シミュレーション終了年齢", current_age, 100, 80)
-simulation_years = end_age - current_age # 運用期間を計算
+end_age = st.sidebar.slider("シミュレーション終了年齢", int(current_age), 100, int(max(current_age, 85.0)))
 
 initial_investment = st.sidebar.number_input("現在の一括投資額 (円)", value=1000000, step=100000)
 
 st.sidebar.subheader("積立の2段階設定")
 monthly_deposit_1 = st.sidebar.number_input("初期の月間積立額 (円)", value=50000, step=5000)
-change_deposit_age = st.sidebar.slider("積立額を変える年齢", current_age, end_age, 40)
+# 初期値が現在の年齢を下回らないように max() を使う
+change_deposit_age = st.sidebar.slider("積立額を変える年齢", int(current_age), int(end_age), int(max(current_age, 45.0)))
 monthly_deposit_2 = st.sidebar.number_input("変更後の月間積立額 (円)", value=100000, step=5000)
 
 st.sidebar.header("2. 取り崩し設定")
-start_withdrawal_age = st.sidebar.slider("取り崩しを開始する年齢", current_age, end_age, 65)
+start_withdrawal_age = st.sidebar.slider("取り崩しを開始する年齢", int(current_age), int(end_age), int(max(current_age, 65.0)))
 monthly_withdrawal = st.sidebar.number_input("毎月の取り崩し額 (円)", value=150000, step=5000)
 
 st.sidebar.header("3. 臨時出費の設定")
-exp_1_age = st.sidebar.number_input("出費1：何歳？", current_age, end_age, current_age + 5)
+# 出費の年齢も current_age 以上になるように調整
+exp_1_age = st.sidebar.number_input("出費1：何歳？", int(current_age), int(end_age), int(max(current_age, 40.0)))
 exp_1_v = st.sidebar.number_input("出費1：金額 (円)", value=0, step=100000)
 
-exp_2_age = st.sidebar.number_input("出費2：何歳？", current_age, end_age, current_age + 10)
+exp_2_age = st.sidebar.number_input("出費2：何歳？", int(current_age), int(end_age), int(max(current_age, 50.0)))
 exp_2_v = st.sidebar.number_input("出費2：金額 (円)", value=0, step=100000)
 
-exp_3_age = st.sidebar.number_input("出費3：何歳？", current_age, end_age, current_age + 15)
+exp_3_age = st.sidebar.number_input("出費3：何歳？", int(current_age), int(end_age), int(max(current_age, 60.0)))
 exp_3_v = st.sidebar.number_input("出費3：金額 (円)", value=0, step=100000)
 
-st.sidebar.header("4. 年率設定")
-rate_early = st.sidebar.slider("初期の年率 (%)", 0.0, 15.0, 3.0, 0.1) / 100
-change_rate_age = st.sidebar.slider("年率を変える年齢", current_age, end_age, 60)
-rate_later = st.sidebar.slider("変更後の年率 (%)", 0.0, 15.0, 3.0, 0.1) / 100
+st.sidebar.header("4. 年率設定（3段階）")
+rate_1 = st.sidebar.slider("年率①：初期 (%)", 0.0, 15.0, 5.0, 0.1) / 100
+change_rate_age_1 = st.sidebar.slider("年率②へ切り替える年齢", int(current_age), int(end_age), int(max(current_age, 45.0)))
+
+rate_2 = st.sidebar.slider("年率②：中期 (%)", 0.0, 15.0, 3.0, 0.1) / 100
+change_rate_age_2 = st.sidebar.slider("年率③へ切り替える年齢", float(change_rate_age_1), float(end_age), float(max(change_rate_age_1, 65.0)))
+
+rate_3 = st.sidebar.slider("年率③：後期 (%)", 0.0, 15.0, 1.0, 0.1) / 100
 
 # --- 計算ロジック ---
 def run_simulation():
     balance = initial_investment
     data = []
     
-    # 臨時出費のタイミング（月数）を計算
     special_expenses = {
         int((exp_1_age - current_age) * 12): exp_1_v,
         int((exp_2_age - current_age) * 12): exp_2_v,
@@ -50,8 +54,13 @@ def run_simulation():
     for month in range(1, (end_age - current_age) * 12 + 1):
         age = current_age + (month / 12)
         
-        # 1. 利率決定
-        current_rate = rate_early if age <= change_rate_age else rate_later
+        # 1. 利率決定（3段階ロジック）
+        if age <= change_rate_age_1:
+            current_rate = rate_1
+        elif age <= change_rate_age_2:
+            current_rate = rate_2
+        else:
+            current_rate = rate_3
         
         # 2. 臨時出費
         expense_today = special_expenses.get(month, 0)
