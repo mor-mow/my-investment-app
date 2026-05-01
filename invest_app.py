@@ -32,14 +32,22 @@ exp_3_age = st.sidebar.number_input("出費3：何歳？", int(current_age), int
 exp_3_v = st.sidebar.number_input("出費3：金額 (円)", value=0, step=100000)
 
 st.sidebar.header("4. 年率設定（3段階）")
+# 1段階目
 rate_1 = st.sidebar.slider("年率①：初期 (%)", 0.0, 15.0, 5.0, 0.1) / 100
-change_rate_age_1 = st.sidebar.slider("年率②へ切り替える年齢", int(current_age), int(end_age), int(max(current_age, 45.0)))
+change_rate_age_1 = st.sidebar.slider("年率②へ切り替える年齢", int(current_age), int(end_age), int(max(current_age, 45)))
 
+# 2段階目
 rate_2 = st.sidebar.slider("年率②：中期 (%)", 0.0, 15.0, 3.0, 0.1) / 100
-change_rate_age_2 = st.sidebar.slider("年率③へ切り替える年齢", float(change_rate_age_1), float(end_age), float(max(change_rate_age_1, 65.0)))
+# ここを整数(int)刻みに統一
+change_rate_age_2 = st.sidebar.slider(
+    "年率③へ切り替える年齢", 
+    int(change_rate_age_1), 
+    int(end_age), 
+    int(max(change_rate_age_1, 65))
+)
 
+# 3段階目
 rate_3 = st.sidebar.slider("年率③：後期 (%)", 0.0, 15.0, 1.0, 0.1) / 100
-
 # --- 計算ロジック ---
 def run_simulation():
     balance = initial_investment
