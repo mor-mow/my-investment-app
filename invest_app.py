@@ -9,14 +9,11 @@ st.title("📱 ライフプラン・シミュレーター")
 st.sidebar.header("⚙️ 基本設定")
 current_age = st.sidebar.number_input("現在の年齢", value=30, min_value=0, max_value=100)
 end_age = st.sidebar.slider("終了年齢", int(current_age), 100, int(max(current_age, 85)))
-# 初期値を0に変更
 initial_investment = st.sidebar.number_input("現在の一括投資額 (円)", value=0, step=100000)
 
 with st.sidebar.expander("💰 積立の設定"):
-    # 初期値を0に変更
     monthly_deposit_1 = st.number_input("初期の月間積立 (円)", value=0, step=5000)
     change_deposit_age = st.slider("積立額を変える年齢", int(current_age), int(end_age), int(max(current_age, 45)))
-    # 初期値を0に変更
     monthly_deposit_2 = st.number_input("変更後の月間積立 (円)", value=0, step=5000)
 
 with st.sidebar.expander("🏥 臨時出費の設定"):
@@ -28,7 +25,7 @@ with st.sidebar.expander("🏥 臨時出費の設定"):
     exp_3_v = st.number_input("出費3：金額 (円)", value=0, step=100000)
 
 st.sidebar.header("📉 年率設定")
-is_simple_rate = st.sidebar.checkbox("年率を全期間で固定する", value=True) # 最初はシンプルに固定
+is_simple_rate = st.sidebar.checkbox("年率を全期間で固定する", value=True)
 if is_simple_rate:
     fixed_rate = st.sidebar.slider("固定年率 (%)", -15.0, 15.0, 3.0, 0.1) / 100
 else:
@@ -43,15 +40,14 @@ st.sidebar.header("🚪 取り崩し設定")
 start_withdrawal_age = st.sidebar.slider("開始年齢", int(current_age), int(end_age), int(max(current_age, 65)))
 withdrawal_type = st.sidebar.radio("取り崩し方法", ["定額 (円)", "定率 (%)"])
 if withdrawal_type == "定額 (円)":
-    # 初期値を0に変更
     monthly_withdrawal_amount = st.sidebar.number_input("毎月の取り崩し額 (円)", value=0, step=5000)
 else:
-    # 初期値を0.0に変更
     annual_withdrawal_rate = st.sidebar.slider("年間の取り崩し率 (%)", 0.0, 20.0, 0.0, 0.1) / 100
 
 # --- 計算ロジック ---
 def run_simulation():
     balance = initial_investment
+    cumulative_investment = initial_investment
     data = []
     special_expenses = {
         int((exp_1_age - current_age) * 12): exp_1_v,
@@ -75,6 +71,7 @@ def run_simulation():
             action_name = "取り崩し"
         else:
             monthly_cashflow = monthly_deposit_1 if age <= change_deposit_age else monthly_deposit_2
+            cumulative_investment += monthly_cashflow
             action_name = "積立"
             
         balance = max(0, balance + monthly_cashflow) * (1 + current_rate / 12)
@@ -82,6 +79,7 @@ def run_simulation():
         data.append({
             "年齢": round(age, 1),
             "資産残高": int(balance),
+            "投資元本": int(cumulative_investment),
             "月間収支": int(monthly_cashflow),
             "臨時出費": int(expense),
             "区分": action_name
@@ -90,15 +88,23 @@ def run_simulation():
             break
     return pd.DataFrame(data)
 
-df = run_simulation()
+# --- メイン表示エリアの制御 ---
+# 入力があるかチェック
+has_input = (initial_investment > 0 or monthly_deposit_1 > 0 or monthly_deposit_2 > 0)
 
-# --- 表示 ---
-final_bal = df.iloc[-1]['資産残高']
-st.metric(label=f"{end_age}歳時点の予想資産", value=f"¥{final_bal:,}")
-if final_bal <= 0 and df.iloc[-1]['年齢'] < end_age:
-    st.error(f"⚠️ {df.iloc[-1]['年齢']}歳で資産がなくなります")
+if not has_input:
+    st.info("👈 左側のメニューから、現在の一括投資額や毎月の積立額を入力してください。シミュレーションが開始されます。")
+    # 入力待ちの時はダミーの空グラフを表示させておくことも可能ですが、ここでは案内のみ。
+else:
+    df = run_simulation()
+    final_bal = df.iloc[-1]['資産残高']
+    
+    st.metric(label=f"{end_age}歳時点の予想資産", value=f"¥{final_bal:,}")
+    
+    if final_bal <= 0 and df.iloc[-1]['年齢'] < end_age:
+        st.error(f"⚠️ {df.iloc[-1]['年齢']}歳で資産がなくなります")
 
-st.line_chart(df.set_index("年齢")["資産残高"], height=300)
+    st.line_chart(df.set_index("年齢")["資産残高"], height=300)
 
-with st.expander("📊 月ごとの詳細データ"):
-    st.dataframe(df[["年齢", "区分", "月間収支", "臨時出費", "資産残高"]], use_container_width=True)
+    with st.expander("📊 月ごとの詳細データ（元本推移・収支）"):
+        st.dataframe(df[["年齢", "区分", "月間収支", "臨時出費", "投資元本", "資産残高"]], use_container_width=True)
