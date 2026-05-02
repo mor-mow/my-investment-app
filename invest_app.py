@@ -50,32 +50,27 @@ else:
         rate_3_val = st.slider("年率③：後期 (%)", -15.0, 15.0, 1.0, 0.1)
         rate_1, rate_2, rate_3 = rate_1_val/100, rate_2_val/100, rate_3_val/100
 
-st.sidebar.header("🚪 取り崩し設定")
+st.sidebar.header("🚪 取り崩し設定（2段階）")
 start_withdrawal_age = st.sidebar.slider("取り崩し開始年齢", int(current_age), int(end_age), int(max(current_age, get_param("wa", 65))))
-withdrawal_type = st.sidebar.radio("取り崩し方法", ["定額 (円)", "定率 (%)"], index=0 if get_param("wt", "定額 (円)") == "定額 (円)" else 1)
 
-with st.sidebar.expander("取り崩し額/率の設定（2段階）"):
-    if withdrawal_type == "定額 (円)":
-        wv1 = st.number_input("初期の取り崩し額 (円)", value=int(get_param("wv1", 0)), step=5000)
-        cw_age = st.slider("取り崩し額を変える年齢", int(start_withdrawal_age), int(end_age), int(max(start_withdrawal_age, get_param("cw", 75))))
-        wv2 = st.number_input("変更後の取り崩し額 (円)", value=int(get_param("wv2", 0)), step=5000)
-    else:
-        wr1 = st.slider("初期の取り崩し率 (%)", 0.0, 20.0, float(get_param("wr1", 0.0)), 0.1) / 100
-        cw_age = st.slider("取り崩し率を変える年齢", int(start_withdrawal_age), int(end_age), int(max(start_withdrawal_age, get_param("cw", 75))))
-        wr2 = st.slider("変更後の取り崩し率 (%)", 0.0, 20.0, float(get_param("wr2", 0.0)), 0.1) / 100
+with st.sidebar.expander("取り崩し①の設定", expanded=True):
+    wt1 = st.radio("方法①", ["定額 (円)", "定率 (%)"], key="wt1", index=0 if get_param("wt1", "定額") == "定額 (円)" else 1)
+    wv1 = st.number_input("額/率①", value=float(get_param("wv1", 0.0)), step=5000.0 if wt1 == "定額 (円)" else 0.1)
+    
+cw_age = st.sidebar.slider("取り崩し設定を切り替える年齢", int(start_withdrawal_age), int(end_age), int(max(start_withdrawal_age, get_param("cw", 75))))
+
+with st.sidebar.expander("取り崩し②の設定", expanded=True):
+    wt2 = st.radio("方法②", ["定額 (円)", "定率 (%)"], key="wt2", index=0 if get_param("wt2", "定額") == "定額 (円)" else 1)
+    wv2 = st.number_input("額/率②", value=float(get_param("wv2", 0.0)), step=5000.0 if wt2 == "定額 (円)" else 0.1)
 
 # --- 4. URLクエリパラメータの更新 ---
 new_params = {
     "age": current_age, "end": end_age, "init": initial_investment,
     "d1": monthly_deposit_1, "cd": change_deposit_age, "d2": monthly_deposit_2,
     "e1a": exp_1_age, "e1v": exp_1_v, "e2a": exp_2_age, "e2v": exp_2_v, "e3a": exp_3_age, "e3v": exp_3_v,
-    "wa": start_withdrawal_age, "wt": withdrawal_type, "cw": cw_age,
+    "wa": start_withdrawal_age, "wt1": wt1, "wv1": wv1, "cw": cw_age, "wt2": wt2, "wv2": wv2,
     "fr": fixed_rate_val if is_simple_rate else 3.0
 }
-if withdrawal_type == "定額 (円)": 
-    new_params.update({"wv1": wv1, "wv2": wv2})
-else: 
-    new_params.update({"wr1": round(wr1*100,1), "wr2": round(wr2*100,1)})
 st.query_params.update(**new_params)
 
 # --- 5. 計算ロジック ---
@@ -95,13 +90,17 @@ def run_simulation():
         
         m_flow = 0
         if p_age > start_withdrawal_age:
-            if withdrawal_type == "定額 (円)":
-                m_flow = -(wv1 if p_age <= cw_age else wv2)
+            # 取り崩しフェーズ
+            target_wt = wt1 if p_age <= cw_age else wt2
+            target_wv = wv1 if p_age <= cw_age else wv2
+            
+            if target_wt == "定額 (円)":
+                m_flow = -target_wv
             else:
-                curr_wr = wr1 if p_age <= cw_age else wr2
-                m_flow = -(balance * curr_wr) / 12
+                m_flow = -(balance * (target_wv / 100)) / 12
             action = "取り崩し"
         else:
+            # 積立フェーズ
             m_flow = monthly_deposit_1 if p_age <= change_deposit_age else monthly_deposit_2
             cumulative_inv += m_flow
             action = "積立"
@@ -126,7 +125,7 @@ else:
     
     fig = px.line(df, x="年齢(グラフ)", y="資産残高", labels={"年齢(グラフ)": "年齢", "資産残高": "資産残高(円)"}, template="plotly_white")
     fig.update_layout(margin=dict(l=0, r=0, t=10, b=0), height=350, hovermode="x unified")
-    st.plotly_chart(fig, use_container_width=True, config={'displayModeBar': True})
+    st.plotly_chart(fig, use_container_width=True)
     
     with st.expander("📊 詳細データ"):
         st.dataframe(df[["年齢", "月", "区分", "月間収支", "臨時出費", "元本", "資産残高"]], use_container_width=True, hide_index=True)
