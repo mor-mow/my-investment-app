@@ -101,6 +101,7 @@ def run_simulation():
         
         annual_rate = fixed_rate if is_simple_rate else (rate_1 if precise_age <= change_rate_age_1 else rate_2 if precise_age <= change_rate_age_2 else rate_3)
         monthly_rate = annual_rate / 12
+        
         expense = special_expenses.get(month_idx, 0)
         balance = max(0, balance - expense)
         
@@ -134,8 +135,10 @@ else:
     col1, col2 = st.columns(2)
     with col1: st.metric(label=f"{end_age}歳時点の予想資産", value=f"¥{final_bal:,}")
     with col2:
-        if final_bal <= 0: st.error(f"⚠️ {int(df.iloc[-1]['年齢（グラフ）'])}歳で資産消滅")
-        else: st.success("✅ 計画達成！")
+        if final_bal <= 0: 
+            st.error(f"⚠️ {int(df.iloc[-1]['年齢（グラフ）'])}歳で資産消滅")
+        else: 
+            st.success("✅ 資産を維持できています")
         st.caption("※設定はURLに保存済み。ブックマーク推奨")
 
     # Plotly グラフ
@@ -146,7 +149,12 @@ else:
     fig.update_xaxes(showgrid=True)
     fig.update_yaxes(showgrid=True, tickformat=",.0f")
     
-    st.plotly_chart(fig, use_container_width=True, config={'displayModeBar': False})
+    # グラフを表示（configで画像ダウンロード機能を有効化）
+    st.plotly_chart(fig, use_container_width=True, config={'displaylogo': False, 'modeBarButtonsToAdd': ['toImage']})
 
     with st.expander("📊 月ごとの詳細データ"):
         st.dataframe(df[["年齢", "月", "区分", "月間収支", "臨時出費", "投資元本", "資産残高"]], use_container_width=True, hide_index=True)
+
+    # データのCSVダウンロードボタン（記録用）
+    csv = df.to_csv(index=False).encode('utf-8-sig')
+    st.download_button(label="📥 結果をCSVで保存", data=csv, file_name=f"investment_sim_{current_age}to{end_age}.csv", mime="text/csv")
