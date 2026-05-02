@@ -53,15 +53,13 @@ else:
 
 st.sidebar.header("🚪 取り崩し設定（2段階）")
 start_withdrawal_age = st.sidebar.slider("取り崩し開始年齢", int(current_age), int(end_age), int(max(current_age, get_param("wa", 65))))
+withdrawal_type = st.sidebar.radio("取り崩し方法", ["定額 (円)", "定率 (%)"], index=0 if get_param("wt1", "定額 (円)") == "定額 (円)" else 1)
 
-with st.sidebar.expander("取り崩し①の設定", expanded=True):
-    wt1 = st.radio("方法①", ["定額 (円)", "定率 (%)"], key="wt1", index=0 if get_param("wt1", "定額 (円)") == "定額 (円)" else 1)
+with st.sidebar.expander("取り崩し額/率の設定"):
+    wt1 = withdrawal_type
     wv1 = st.number_input("額/率①", value=float(get_param("wv1", 0.0)), step=5000.0 if wt1 == "定額 (円)" else 0.1)
-    
-cw_age = st.sidebar.slider("取り崩し設定を切り替える年齢", int(start_withdrawal_age), int(end_age), int(max(start_withdrawal_age, get_param("cw", 75))))
-
-with st.sidebar.expander("取り崩し②の設定", expanded=True):
-    wt2 = st.radio("方法②", ["定額 (円)", "定率 (%)"], key="wt2", index=0 if get_param("wt2", "定額 (円)") == "定額 (円)" else 1)
+    cw_age = st.slider("設定切替年齢", int(start_withdrawal_age), int(end_age), int(max(start_withdrawal_age, get_param("cw", 75))))
+    wt2 = st.radio("方法②", ["定額 (円)", "定率 (%)"], index=0 if get_param("wt2", "定額 (円)") == "定額 (円)" else 1)
     wv2 = st.number_input("額/率②", value=float(get_param("wv2", 0.0)), step=5000.0 if wt2 == "定額 (円)" else 0.1)
 
 # --- 4. URLパラメータ更新 ---
@@ -109,19 +107,18 @@ if not has_input:
 else:
     df = run_simulation()
     f_bal = df.iloc[-1]['資産残高']
+    f_age = df.iloc[-1]['年齢(グラフ)']
     
-    # グラフ用変換
     df["資産(万円)"] = df["資産残高"] / 10000
     df["元本(万円)"] = df["元本合計"] / 10000
     
-    # Y軸の最大値を計算し15%の余白を追加
     max_val = max(df["資産(万円)"].max(), df["元本(万円)"].max())
     y_upper = max_val * 1.15 if max_val > 0 else 100
 
     col1, col2 = st.columns(2)
     with col1: st.metric(label=f"{end_age}歳時点の予想資産", value=f"¥{f_bal:,}")
     with col2:
-        if f_bal <= 0: st.error(f"⚠️ {int(df.iloc[-1]['年齢(グラフ)'])}歳で資産消滅")
+        if f_bal <= 0: st.error(f"⚠️ {int(f_age)}歳で資産消滅")
         else: st.success("✅ 資産を維持できています")
     
     fig = go.Figure()
@@ -129,14 +126,24 @@ else:
     fig.add_trace(go.Scatter(x=df["年齢(グラフ)"], y=df["元本(万円)"], name="投資元本", line=dict(color="#ff7f0e", width=2, dash="dash")))
 
     fig.update_layout(
-        margin=dict(l=0, r=0, t=10, b=0), height=380, hovermode="x unified",
+        margin=dict(l=10, r=10, t=10, b=10), height=400, hovermode="x unified",
         legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
         yaxis_title="金額 (万円)", template="plotly_white"
     )
     
-    fig.update_xaxes(title="年齢 (歳)", dtick=5, showgrid=True, gridcolor='LightGray')
-    # 縦軸に余裕（レンジ）を設定
+    # 横軸の調整（左右に2年分の余白を追加）
+    fig.update_xaxes(
+        title="年齢 (歳)", 
+        range=[current_age - 2, end_age + 2], 
+        dtick=5, showgrid=True, gridcolor='LightGray'
+    )
+    
+    # 縦軸の調整
     fig.update_yaxes(range=[-max_val*0.05, y_upper], ticksuffix="万", tickformat=",", showgrid=True) 
+
+    # 開始と終了の年齢を注釈で表示
+    fig.add_annotation(x=current_age, y=0, text=f"開始:{current_age}歳", showarrow=True, arrowhead=1, yshift=-20)
+    fig.add_annotation(x=f_age, y=df.iloc[-1]["資産(万円)"], text=f"終了:{int(f_age)}歳", showarrow=True, arrowhead=1, ax=40, ay=-40)
     
     st.plotly_chart(fig, use_container_width=True)
     
