@@ -1,5 +1,6 @@
 import streamlit as st
 import pandas as pd
+import plotly.express as px
 
 # 1. ページ基本設定
 st.set_page_config(page_title="資産シミュレーター", layout="centered")
@@ -15,7 +16,7 @@ def get_param(key, default):
         try:
             return float(val) if "." in val else int(val)
         except:
-            return val # 文字列（取り崩し方法など）の場合はそのまま返す
+            return val
     return default
 
 # --- 3. サイドバー設定エリア ---
@@ -46,16 +47,17 @@ if is_simple_rate:
 else:
     with st.sidebar.expander("年率の詳細設定（3段階）", expanded=True):
         rate_1_val = st.sidebar.slider("年率①：初期 (%)", -15.0, 15.0, 5.0, 0.1)
-        change_rate_age_1 = st.sidebar.slider("②への切替年齢", int(current_age), int(end_age), int(max(current_age, get_param("cr1", 45))))
+        cr1_def = get_param("cr1", 45)
+        change_rate_age_1 = st.sidebar.slider("②への切替年齢", int(current_age), int(end_age), int(max(current_age, cr1_def)))
         rate_2_val = st.sidebar.slider("年率②：中期 (%)", -15.0, 15.0, 3.0, 0.1)
-        change_rate_age_2 = st.sidebar.slider("③への切替年齢", int(change_rate_age_1), int(end_age), int(max(change_rate_age_1, get_param("cr2", 65))))
+        cr2_def = get_param("cr2", 65)
+        change_rate_age_2 = st.sidebar.slider("③への切替年齢", int(change_rate_age_1), int(end_age), int(max(change_rate_age_1, cr2_def)))
         rate_3_val = st.sidebar.slider("年率③：後期 (%)", -15.0, 15.0, 1.0, 0.1)
         rate_1, rate_2, rate_3 = rate_1_val/100, rate_2_val/100, rate_3_val/100
 
 st.sidebar.header("🚪 取り崩し設定")
-start_withdrawal_age = st.sidebar.slider("取り崩し開始年齢", int(current_age), int(end_age), int(max(current_age, get_param("wa", 65))))
-
-# 修正：取り崩し方法（定額か定率か）の記憶
+wa_def = get_param("wa", 65)
+start_withdrawal_age = st.sidebar.slider("取り崩し開始年齢", int(current_age), int(end_age), int(max(current_age, wa_def)))
 w_types = ["定額 (円)", "定率 (%)"]
 w_type_default = get_param("wt", "定額 (円)")
 withdrawal_type = st.sidebar.radio("取り崩し方法", w_types, index=w_types.index(w_type_default) if w_type_default in w_types else 0)
@@ -71,8 +73,7 @@ new_params = {
     "age": current_age, "end": end_age, "init": initial_investment,
     "d1": monthly_deposit_1, "cd": change_deposit_age, "d2": monthly_deposit_2,
     "e1a": exp_1_age, "e1v": exp_1_v, "e2a": exp_2_age, "e2v": exp_2_v, "e3a": exp_3_age, "e3v": exp_3_v,
-    "wa": start_withdrawal_age, "fr": fixed_rate_val if is_simple_rate else 3.0,
-    "wt": withdrawal_type # 取り崩しタイプを保存
+    "wa": start_withdrawal_age, "fr": fixed_rate_val if is_simple_rate else 3.0, "wt": withdrawal_type
 }
 if not is_simple_rate:
     new_params.update({"cr1": change_rate_age_1, "cr2": change_rate_age_2})
@@ -100,7 +101,8 @@ def run_simulation():
         
         annual_rate = fixed_rate if is_simple_rate else (rate_1 if precise_age <= change_rate_age_1 else rate_2 if precise_age <= change_rate_age_2 else rate_3)
         monthly_rate = annual_rate / 12
-        balance = max(0, balance - special_expenses.get(month_idx, 0))
+        expense = special_expenses.get(month_idx, 0)
+        balance = max(0, balance - expense)
         
         monthly_cashflow = 0
         if precise_age > start_withdrawal_age:
@@ -112,12 +114,18 @@ def run_simulation():
             action_name = "積立"
             
         balance = max(0, balance + monthly_cashflow) * (1 + monthly_rate)
-        data.append({"年齢（グラフ）": precise_age, "年齢": display_age, "月": f"{display_month}ヶ月目", "区分": action_name, "月間収支": int(monthly_cashflow), "臨時出費": int(expense if (expense := special_expenses.get(month_idx, 0)) else 0), "投資元本": int(cumulative_investment), "資産残高": int(balance)})
+        data.append({
+            "年齢（グラフ）": round(precise_age, 2), 
+            "年齢": display_age, "月": f"{display_month}ヶ月目", 
+            "区分": action_name, "月間収支": int(monthly_cashflow), 
+            "臨時出費": int(expense), "投資元本": int(cumulative_investment), "資産残高": int(balance)
+        })
         if balance <= 0 and precise_age > start_withdrawal_age: break
     return pd.DataFrame(data)
 
 # --- 6. 表示エリア ---
 has_input = (initial_investment > 0 or monthly_deposit_1 > 0 or monthly_deposit_2 > 0)
+
 if not has_input:
     st.info("👈 左側のメニューから設定を入力してください。")
 else:
@@ -127,8 +135,18 @@ else:
     with col1: st.metric(label=f"{end_age}歳時点の予想資産", value=f"¥{final_bal:,}")
     with col2:
         if final_bal <= 0: st.error(f"⚠️ {int(df.iloc[-1]['年齢（グラフ）'])}歳で資産消滅")
-        else: st.success("✅ シミュレーション完了")
-        st.caption("※現在の設定はURLに保存されています。ブックマーク推奨")
-    st.line_chart(df.set_index("年齢（グラフ）")["資産残高"], height=350, use_container_width=True)
+        else: st.success("✅ 計画達成！")
+        st.caption("※設定はURLに保存済み。ブックマーク推奨")
+
+    # Plotly グラフ
+    fig = px.line(df, x="年齢（グラフ）", y="資産残高", 
+                  labels={"年齢（グラフ）": "年齢", "資産残高": "資産残高(円)"},
+                  template="plotly_white")
+    fig.update_layout(margin=dict(l=0, r=0, t=10, b=0), height=350, hovermode="x unified")
+    fig.update_xaxes(showgrid=True)
+    fig.update_yaxes(showgrid=True, tickformat=",.0f")
+    
+    st.plotly_chart(fig, use_container_width=True, config={'displayModeBar': False})
+
     with st.expander("📊 月ごとの詳細データ"):
         st.dataframe(df[["年齢", "月", "区分", "月間収支", "臨時出費", "投資元本", "資産残高"]], use_container_width=True, hide_index=True)
