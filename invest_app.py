@@ -1,6 +1,7 @@
 import streamlit as st
 import pandas as pd
 import plotly.express as px
+import plotly.graph_objects as go
 
 # 1. ページ基本設定
 st.set_page_config(page_title="資産シミュレーター", layout="centered")
@@ -63,7 +64,7 @@ with st.sidebar.expander("取り崩し②の設定", expanded=True):
     wt2 = st.radio("方法②", ["定額 (円)", "定率 (%)"], key="wt2", index=0 if get_param("wt2", "定額") == "定額 (円)" else 1)
     wv2 = st.number_input("額/率②", value=float(get_param("wv2", 0.0)), step=5000.0 if wt2 == "定額 (円)" else 0.1)
 
-# --- 4. URLクエリパラメータの更新 ---
+# --- 4. URLパラメータ更新 ---
 new_params = {
     "age": current_age, "end": end_age, "init": initial_investment,
     "d1": monthly_deposit_1, "cd": change_deposit_age, "d2": monthly_deposit_2,
@@ -84,29 +85,20 @@ def run_simulation():
     for m in range(1, total_months + 1):
         p_age = current_age + (m / 12)
         d_age = int(current_age + (m - 1) // 12)
-        
         ann_rate = fixed_rate if is_simple_rate else (rate_1 if p_age <= cr1_age else rate_2 if p_age <= cr2_age else rate_3)
         balance = max(0, balance - special_exp.get(m, 0))
-        
         m_flow = 0
         if p_age > start_withdrawal_age:
-            # 取り崩しフェーズ
             target_wt = wt1 if p_age <= cw_age else wt2
             target_wv = wv1 if p_age <= cw_age else wv2
-            
-            if target_wt == "定額 (円)":
-                m_flow = -target_wv
-            else:
-                m_flow = -(balance * (target_wv / 100)) / 12
+            m_flow = -target_wv if target_wt == "定額 (円)" else -(balance * (target_wv / 100)) / 12
             action = "取り崩し"
         else:
-            # 積立フェーズ
             m_flow = monthly_deposit_1 if p_age <= change_deposit_age else monthly_deposit_2
             cumulative_inv += m_flow
             action = "積立"
-            
         balance = max(0, balance + m_flow) * (1 + ann_rate / 12)
-        data.append({"年齢(グラフ)": p_age, "年齢": d_age, "月": f"{(m-1)%12+1}ヶ月目", "区分": action, "月間収支": int(m_flow), "臨時出費": int(special_exp.get(m, 0)), "元本": int(cumulative_inv), "資産残高": int(balance)})
+        data.append({"年齢(グラフ)": p_age, "年齢": d_age, "月": f"{(m-1)%12+1}ヶ月目", "区分": action, "月間収支": int(m_flow), "臨時出費": int(special_exp.get(m, 0)), "元本合計": int(cumulative_inv), "資産残高": int(balance)})
         if balance <= 0 and p_age > start_withdrawal_age: break
     return pd.DataFrame(data)
 
@@ -123,11 +115,31 @@ else:
         if f_bal <= 0: st.error(f"⚠️ {int(df.iloc[-1]['年齢(グラフ)'])}歳で資産消滅")
         else: st.success("✅ 資産を維持できています")
     
-    fig = px.line(df, x="年齢(グラフ)", y="資産残高", labels={"年齢(グラフ)": "年齢", "資産残高": "資産残高(円)"}, template="plotly_white")
-    fig.update_layout(margin=dict(l=0, r=0, t=10, b=0), height=350, hovermode="x unified")
+    # グラフ用変換
+    df["資産(万円)"] = df["資産残高"] / 10000
+    df["元本(万円)"] = df["元本合計"] / 10000
+
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(x=df["年齢(グラフ)"], y=df["資産(万円)"], name="資産残高", line=dict(color="#1f77b4", width=3)))
+    fig.add_trace(go.Scatter(x=df["年齢(グラフ)"], y=df["元本(万円)"], name="投資元本", line=dict(color="#ff7f0e", width=2, dash="dash")))
+
+    fig.update_layout(
+        margin=dict(l=0, r=0, t=10, b=0), height=350, hovermode="x unified",
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+        yaxis_title="金額 (万円)", template="plotly_white"
+    )
+    
+    # --- 横軸の調整 ---
+    fig.update_xaxes(
+        title="年齢 (歳)",
+        dtick=5,          # 5歳刻みで数字を表示
+        showgrid=True,
+        gridcolor='LightGray'
+    )
+    
+    fig.update_yaxes(ticksuffix="万", tickformat=",") 
     st.plotly_chart(fig, use_container_width=True)
     
-    with st.expander("📊 詳細データ"):
-        st.dataframe(df[["年齢", "月", "区分", "月間収支", "臨時出費", "元本", "資産残高"]], use_container_width=True, hide_index=True)
-    
+    with st.expander("📊 詳細データ（円単位）"):
+        st.dataframe(df[["年齢", "月", "区分", "月間収支", "臨時出費", "元本合計", "資産残高"]], use_container_width=True, hide_index=True)
     st.download_button(label="📥 CSV保存", data=df.to_csv(index=False).encode('utf-8-sig'), file_name="sim_result.csv", mime="text/csv")
