@@ -130,29 +130,27 @@ else:
     fig.add_trace(go.Scatter(x=df["年齢(グラフ)"], y=df["資産(万円)"], name="資産残高", line=dict(color="#1f77b4", width=3)))
     fig.add_trace(go.Scatter(x=df["年齢(グラフ)"], y=df["元本(万円)"], name="投資元本", line=dict(color="#ff7f0e", width=2, dash="dash")))
 
-    # ダークモード対応：背景色に基づいて線の色を自動設定
-    # Streamlitのテーマ設定を自動適用（plotly_whiteをベースにしつつ調整）
     fig.update_layout(
         margin=dict(l=10, r=10, t=10, b=10), height=400, hovermode="x unified",
         legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
         yaxis_title="金額 (万円)", 
-        template="plotly_white" # 基本は白だが、下部でグリッド色を調整
+        template="plotly_white"
     )
     
-    # 横軸・縦軸：ダークモードでも見やすいようにグレー系の点線に固定
-    grid_color = "rgba(128, 128, 128, 0.3)" # 半透明のグレー
-    zero_line_color = "gray" # 0のラインをグレーにして、白背景でも黒背景でも見えるように
+    # デザイン：グレーの軸色（ダークモード対応）
+    grid_color = "rgba(128, 128, 128, 0.3)"
+    zero_line_color = "gray"
 
     fig.update_xaxes(
         title="年齢 (歳)", range=[current_age - 2, end_age + 2], dtick=5,
         showgrid=True, gridcolor=grid_color, gridwidth=1, griddash='dot',
-        zeroline=True, zerolinecolor=zero_line_color, zerolinewidth=2
+        zeroline=True, zerolinecolor=zero_line_color, zerolinewidth=2 # 年齢の起点も実線に
     )
     
     fig.update_yaxes(
         range=[-max_val*0.05, y_upper], ticksuffix="万", tickformat=",",
         showgrid=True, gridcolor=grid_color, gridwidth=1, griddash='dot',
-        zeroline=True, zerolinecolor=zero_line_color, zerolinewidth=2
+        zeroline=True, zerolinecolor=zero_line_color, zerolinewidth=2 # 0円ラインも実線に
     ) 
 
     # 注釈
