@@ -57,7 +57,6 @@ def dynamic_settings(label, prefix, default_val, is_rate=False, is_withdrawal=Fa
             res_list.append({"val": val, "age": age, "mode": row_mode})
         return res_list
 
-# 各設定リストを確実に受け取る
 deposits_list = dynamic_settings("💰 積立設定", "dep", 50000)
 rates_list = dynamic_settings("📉 年率設定", "rate", 3.0, is_rate=True)
 withdrawals_list = dynamic_settings("🚪 取り崩し設定", "wd", 150000, is_withdrawal=True)
@@ -73,101 +72,119 @@ with st.sidebar.expander("🏥 臨時収支の設定"):
         a = int(col2.number_input(f"年齢 {i+1}", current_age, end_age, safe_ea, key=f"ea{i}"))
         if v != 0: special_events.append({"val": v, "age": a})
 
-# --- 4. 計算ロジック ---
+# --- 4. 計算ロジック (徹底修正) ---
 def run_simulation():
-    balance = float(initial_sum)
-    cum_inv = float(initial_sum)
-    data = []
+    # 計算用変数を初期化
+    current_balance = float(initial_sum)
+    cumulative_invested = float(initial_sum)
+    data_log = []
     total_months = (end_age - current_age) * 12
-    event_dict = {int((e["age"] - current_age) * 12 + 1): e["val"] for e in special_events}
     
-    # 取り崩しが「実質的に開始」される最小年齢を探す
-    active_w_ages = [s["age"] for s in withdrawals_list if s["val"] > 0]
-    first_w_age = min(active_w_ages) if active_w_ages else 999
+    # 臨時イベントを月単位の辞書に変換
+    event_map = {int((e["age"] - current_age) * 12 + 1): e["val"] for e in special_events}
+    
+    # 取り崩しが開始される最小の年齢を特定
+    valid_withdrawal_starts = [s["age"] for s in withdrawals_list if s["val"] > 0]
+    w_start_threshold = min(valid_withdrawal_starts) if valid_withdrawal_starts else 999
 
     for m in range(1, total_months + 1):
-        p_age = current_age + ((m - 1) / 12)
-        d_age = int(p_age)
+        month_age = current_age + ((m - 1) / 12)
+        display_age_int = int(month_age)
         
-        # 指定年齢に合致する設定を探す関数
-        def get_current_setting(s_list, target_age):
+        # 1. 適用する設定（利率、積立、取り崩し）を決定
+        def get_setting(s_list, target_age):
             active = s_list[0] if s_list else None
             for s in s_list:
                 if target_age >= s["age"]: active = s
             return active
 
-        # 利率
-        s_rate = get_current_setting(rates_list, p_age)
-        curr_rate = s_rate["val"] if s_rate else 0.0
+        s_rate = get_setting(rates_list, month_age)
+        annual_rate = s_rate["val"] if s_rate else 0.0
         
-        # 臨時収支
-        ev_val = float(event_dict.get(m, 0))
-        balance += ev_val
-        if ev_val > 0: cum_inv += ev_val
+        # 2. 臨時収支の反映
+        monthly_event_val = float(event_map.get(m, 0))
+        current_balance += monthly_event_val
+        if monthly_event_val > 0:
+            cumulative_invested += monthly_event_val
 
-        m_flow, action = 0.0, "待機"
+        # 3. 積立 or 取り崩しの計算
+        m_cashflow = 0.0
+        current_action = "待機"
         
-        # フェーズ判定
-        if p_age >= first_w_age:
-            # 取り崩し期
-            s_w = get_current_setting(withdrawals_list, p_age)
+        # 取り崩しフェーズの判定
+        if month_age >= w_start_threshold:
+            s_w = get_setting(withdrawals_list, month_age)
             if s_w and s_w["val"] > 0:
                 if s_w["mode"] == "定額 (円)":
-                    m_flow = -float(s_w["val"])
+                    m_cashflow = -float(s_w["val"])
                 else:
-                    m_flow = -(balance * (float(s_w["val"]) / 100)) / 12
-                action = "取り崩し"
+                    # 定率取り崩し (残高 × 率 / 12)
+                    m_cashflow = -(current_balance * (float(s_w["val"]) / 100)) / 12
+                current_action = "取り崩し"
         else:
-            # 積立期
-            s_d = get_current_setting(deposits_list, p_age)
-            if s_d and s_d["val"] > 0 and p_age >= s_d["age"]:
-                m_flow = float(s_d["val"])
-                cum_inv += m_flow
-                action = "積立"
-            
-        # 残高更新
-        balance = max(0.0, balance + m_flow)
-        balance *= (1 + (curr_rate / 100) / 12)
+            # 積立フェーズ
+            s_d = get_setting(deposits_list, month_age)
+            if s_d and s_d["val"] > 0 and month_age >= s_d["age"]:
+                m_cashflow = float(s_d["val"])
+                cumulative_invested += m_cashflow
+                current_action = "積立"
         
-        data.append({
-            "年齢(グラフ)": round(p_age + 1/12, 2), "年齢": d_age, "月": f"{(m-1)%12+1}ヶ月目", 
-            "区分": action, "月間収支": int(m_flow), "臨時収支": int(ev_val), 
-            "元本": int(cum_inv), "資産残高": int(balance)
+        # 4. 残高に収支を反映し、利息計算
+        current_balance = max(0.0, current_balance + m_cashflow)
+        if current_balance > 0:
+            # 利息を付与
+            current_balance *= (1 + (annual_rate / 100) / 12)
+        
+        # 5. ログに追加
+        data_log.append({
+            "年齢(グラフ)": round(month_age + 1/12, 2),
+            "年齢": display_age_int,
+            "月": f"{(m-1)%12+1}ヶ月目",
+            "区分": current_action,
+            "月間収支": int(m_cashflow),
+            "臨時収支": int(monthly_event_val),
+            "元本合計": int(cumulative_invested),
+            "資産残高": int(current_balance)
         })
-        if balance <= 0 and action == "取り崩し": break
-    return pd.DataFrame(data)
+        
+        # 資産が尽きたら終了
+        if current_balance <= 0 and current_action == "取り崩し":
+            break
+            
+    return pd.DataFrame(data_log)
 
 # --- 5. 表示エリア ---
-has_input = (initial_sum > 0 or any(s["val"] > 0 for s in deposits_list))
-if not has_input:
-    st.info("👈 左側のメニューから設定を入力してください。")
+has_input_data = (initial_sum > 0 or any(s["val"] > 0 for s in deposits_list))
+if not has_input_data:
+    st.info("👈 左側のメニューから数値を入力してください。")
 else:
-    df = run_simulation()
-    if not df.empty:
-        f_bal = df.iloc[-1]['資産残高']
+    sim_df = run_simulation()
+    if not sim_df.empty:
+        final_balance_val = sim_df.iloc[-1]['資産残高']
         c1, c2 = st.columns(2)
-        with c1: st.metric(f"{end_age}歳時点の予想資産", f"¥{f_bal:,}")
+        with c1: st.metric(f"{end_age}歳時点の予想資産", f"¥{final_balance_val:,}")
         with c2:
-            if f_bal <= 0: st.error(f"⚠️ {int(df.iloc[-1]['年齢(グラフ)'])}歳で資産消滅")
+            if final_balance_val <= 0: st.error(f"⚠️ {int(sim_df.iloc[-1]['年齢(グラフ)'])}歳で資産消滅")
             else: st.success("✅ 資産を維持できています")
 
-        df_g = df.copy()
-        df_g["資産(万円)"] = df_g["資産残高"] / 10000
-        df_g["元本(万円)"] = df_g["元本"] / 10000
-        max_v = max(df_g["資産(万円)"].max(), df_g["元本(万円)"].max(), 10.0)
+        # グラフ描画
+        graph_df = sim_df.copy()
+        graph_df["資産(万円)"] = graph_df["資産残高"] / 10000
+        graph_df["元本(万円)"] = graph_df["元本合計"] / 10000
+        y_max = max(graph_df["資産(万円)"].max(), graph_df["元本(万円)"].max(), 10.0)
         
         fig = go.Figure()
-        fig.add_trace(go.Scatter(x=df_g["年齢(グラフ)"], y=df_g["資産(万円)"], name="資産残高", line=dict(color="#1f77b4", width=3)))
-        fig.add_trace(go.Scatter(x=df_g["年齢(グラフ)"], y=df_g["元本(万円)"], name="投資元本", line=dict(color="#ff7f0e", width=2, dash="dash")))
-        fig.update_layout(margin=dict(l=10,r=10,t=10,b=10), height=400, hovermode="x unified", legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1), template="plotly_white")
+        fig.add_trace(go.Scatter(x=graph_df["年齢(グラフ)"], y=graph_df["資産(万円)"], name="資産残高", line=dict(color="#1f77b4", width=3)))
+        fig.add_trace(go.Scatter(x=graph_df["年齢(グラフ)"], y=graph_df["元本(万円)"], name="投資元本", line=dict(color="#ff7f0e", width=2, dash="dash")))
+        fig.update_layout(margin=dict(l=10,r=10,t=10,b=10), height=400, hovermode="x unified", legend=dict(orientation="h", y=1.1), template="plotly_white")
         grid_c, zero_c = "rgba(128, 128, 128, 0.3)", "gray"
         fig.update_xaxes(title="年齢", range=[current_age-1, end_age+1], dtick=5, showgrid=True, gridcolor=grid_c, griddash='dot', zeroline=True, zerolinecolor=zero_c, zerolinewidth=2)
-        fig.update_yaxes(title="金額 (万円)", range=[-max_v*0.05, max_v*1.15], ticksuffix="万", tickformat=",", showgrid=True, gridcolor=grid_c, griddash='dot', zeroline=True, zerolinecolor=zero_c, zerolinewidth=2)
+        fig.update_yaxes(title="金額 (万円)", range=[-y_max*0.05, y_max*1.15], ticksuffix="万", tickformat=",", showgrid=True, gridcolor=grid_c, griddash='dot', zeroline=True, zerolinecolor=zero_c, zerolinewidth=2)
         st.plotly_chart(fig, use_container_width=True)
         
-        with st.expander("📊 詳細データ"):
-            st.dataframe(df[["年齢", "月", "区分", "月間収支", "臨時収支", "元本", "資産残高"]], use_container_width=True, hide_index=True)
-        st.download_button(label="📥 CSV保存", data=df.to_csv(index=False).encode('utf-8-sig'), file_name="sim_result.csv", mime="text/csv")
+        with st.expander("📊 月ごとの詳細データ"):
+            st.dataframe(sim_df[["年齢", "月", "区分", "月間収支", "臨時収支", "元本合計", "資産残高"]], use_container_width=True, hide_index=True)
+        st.download_button(label="📥 CSV保存", data=sim_df.to_csv(index=False).encode('utf-8-sig'), file_name="sim_result.csv", mime="text/csv")
 
 # --- 6. URLクエリパラメータ更新 ---
 st.query_params.update({k: v for k, v in st.session_state.items() if not str(k).startswith("FormSubmit")})
