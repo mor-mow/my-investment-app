@@ -33,20 +33,24 @@ def dynamic_settings(label, prefix, default_val, is_rate=False, is_withdrawal=Fa
             st.markdown(f"**第 {i+1} 段階**")
             col1, col2 = st.columns(2)
             
-            # 取り崩しの場合のみ、各段階で方法を選択
+            # 方法の選択（取り崩しのみ）
             row_mode = "定額 (円)"
             if is_withdrawal:
-                row_mode = col1.selectbox(f"計算方法 {i+1}", ["定額 (円)", "定率 (%)"], 
+                row_mode = col1.selectbox(f"方法 {i+1}", ["定額 (円)", "定率 (%)"], 
                                          index=0 if get_p(f"{prefix}_m{i}", "定額 (円)") == "定額 (円)" else 1, 
                                          key=f"{prefix}_m{i}")
             
             min_age = current_age if i == 0 else settings[i-1]["age"]
             
-            # 値の入力（定率か年率ならfloat、定額ならint）
+            # 【修正点】方法に合わせて入力ボックスを出し分け
             if is_rate or (is_withdrawal and row_mode == "定率 (%)"):
-                val = float(col1.number_input(f"値", -15.0, 30.0, float(get_p(f"{prefix}_v{i}", default_val)), step=0.1, key=f"{prefix}_v{i}"))
+                # 利率や定率の場合は小数点入力
+                label_name = "年率 (%)" if is_rate else "引出率 (%)"
+                val = float(col1.number_input(f"{label_name}", -15.0, 30.0, float(get_p(f"{prefix}_v{i}", default_val if is_rate else 4.0)), step=0.1, key=f"{prefix}_v{i}"))
             else:
-                val = int(col1.number_input(f"円", 0, None, int(get_p(f"{prefix}_v{i}", int(default_val))), step=10000, key=f"{prefix}_v{i}"))
+                # 積立や定額取り崩しの場合は整数入力
+                label_name = "月額 (円)"
+                val = int(col1.number_input(f"{label_name}", 0, None, int(get_p(f"{prefix}_v{i}", int(default_val))), step=10000, key=f"{prefix}_v{i}"))
             
             # 年齢のガード
             saved_age = int(get_p(f"{prefix}_a{i}", min_age))
@@ -59,7 +63,7 @@ def dynamic_settings(label, prefix, default_val, is_rate=False, is_withdrawal=Fa
 # 各セクションの設定
 deposits = dynamic_settings("💰 積立設定", "dep", 50000)
 rates = dynamic_settings("📉 年率設定", "rate", 3.0, is_rate=True)
-withdrawals = dynamic_settings("🚪 取り崩し設定", "wd", 0, is_withdrawal=True)
+withdrawals = dynamic_settings("🚪 取り崩し設定", "wd", 150000, is_withdrawal=True)
 
 with st.sidebar.expander("🏥 臨時収支の設定"):
     exp_count = int(st.number_input("件数", 0, 5, int(get_p("exp_c", 0)), key="exp_c"))
@@ -82,24 +86,23 @@ def run_simulation():
     
     for m in range(1, total_months + 1):
         p_age = current_age + (m / 12)
-        display_age = int(p_age - 0.00001)
+        d_age = int(p_age - 0.00001)
         
-        def find_active_setting(s_list, target_age):
+        def find_active(s_list, target_age):
             active = s_list[0]
             for s in s_list:
                 if target_age >= s["age"]: active = s
             return active
 
-        curr_rate = find_active_setting(rates, p_age)["val"]
+        curr_rate = find_active(rates, p_age)["val"]
         ev_val = float(event_dict.get(m, 0))
         balance += ev_val
         if ev_val > 0: cum_inv += ev_val
 
-        # 取り崩し・積立の判定
-        active_w = find_active_setting(withdrawals, p_age)
-        active_d = find_active_setting(deposits, p_age)
+        active_w = find_active(withdrawals, p_age)
+        active_d = find_active(deposits, p_age)
         
-        # 実際に「取り崩し」が始まっているか（設定年齢に達し、かつ値が0でない）
+        # 取り崩しが「有効（年齢に達し、かつ値が0より大きい）」か判定
         is_w_started = any(s["val"] > 0 and p_age >= s["age"] for s in withdrawals)
         
         m_flow, action = 0.0, "待機"
@@ -109,13 +112,13 @@ def run_simulation():
             else:
                 m_flow = -(balance * (float(active_w["val"]) / 100)) / 12
             action = "取り崩し"
-        elif p_age >= deposits[0]["age"] and active_d["val"] > 0:
+        elif p_age >= active_d["age"] and active_d["val"] > 0:
             m_flow = float(active_d["val"])
             cum_inv += m_flow
             action = "積立"
             
         balance = max(0.0, balance + m_flow) * (1 + (float(curr_rate)/100) / 12)
-        data.append({"年齢(グラフ)": round(p_age, 2), "年齢": display_age, "月": f"{(m-1)%12+1}ヶ月目", "区分": action, "月間収支": int(m_flow), "臨時収支": int(ev_val), "元本": int(cum_inv), "資産残高": int(balance)})
+        data.append({"年齢(グラフ)": round(p_age, 2), "年齢": d_age, "月": f"{(m-1)%12+1}ヶ月目", "区分": action, "月間収支": int(m_flow), "臨時収支": int(ev_val), "元本": int(cum_inv), "資産残高": int(balance)})
         if balance <= 0 and action == "取り崩し": break
     return pd.DataFrame(data)
 
@@ -133,16 +136,15 @@ else:
             if f_bal <= 0: st.error(f"⚠️ {int(df.iloc[-1]['年齢(グラフ)'])}歳で資産消滅")
             else: st.success("✅ 資産を維持できています")
 
-        # グラフ作成
+        # グラフ
         df_g = df.copy()
         df_g["資産(万円)"] = df_g["資産残高"] / 10000
         df_g["元本(万円)"] = df_g["元本"] / 10000
         max_v = max(df_g["資産(万円)"].max(), df_g["元本(万円)"].max())
-        
         fig = go.Figure()
         fig.add_trace(go.Scatter(x=df_g["年齢(グラフ)"], y=df_g["資産(万円)"], name="資産残高", line=dict(color="#1f77b4", width=3)))
         fig.add_trace(go.Scatter(x=df_g["年齢(グラフ)"], y=df_g["元本(万円)"], name="投資元本", line=dict(color="#ff7f0e", width=2, dash="dash")))
-        fig.update_layout(margin=dict(l=10,r=10,t=10,b=10), height=400, hovermode="x unified", legend=dict(orientation="h", y=1.1), template="plotly_white")
+        fig.update_layout(margin=dict(l=10,r=10,t=10,b=10), height=400, hovermode="x unified", legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1), template="plotly_white")
         gc, zc = "rgba(128,128,128,0.3)", "gray"
         fig.update_xaxes(title="年齢", range=[current_age-1, end_age+1], dtick=5, showgrid=True, gridcolor=gc, griddash='dot', zeroline=True, zerolinecolor=zc, zerolinewidth=2)
         fig.update_yaxes(title="金額 (万円)", range=[-max_v*0.05, max_v*1.15], ticksuffix="万", tickformat=",", showgrid=True, gridcolor=gc, griddash='dot', zeroline=True, zerolinecolor=zc, zerolinewidth=2)
