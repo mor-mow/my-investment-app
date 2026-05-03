@@ -65,9 +65,11 @@ with st.sidebar.expander("🏥 臨時収支の設定"):
         if v != 0: special_events.append({"val": v, "age": a})
 
 # --- 4. ワーニングチェックと計算ロジック ---
-# 積立の最終年齢と取り崩しの開始年齢を比較
-last_dep_age = max([s["age"] for s in deposits_list if s["val"] > 0], default=0)
-first_wd_age = min([s["age"] for s in withdrawals_list if s["val"] > 0], default=999)
+# 有効な設定（金額/率が0より大きい）の開始年齢を抽出
+active_dep_ages = [s["age"] for s in deposits_list if s["val"] > 0]
+active_wd_ages = [s["age"] for s in withdrawals_list if s["val"] > 0]
+
+first_wd_age = min(active_wd_ages) if active_wd_ages else 999
 
 def run_simulation():
     current_bal = float(initial_sum)
@@ -94,7 +96,7 @@ def run_simulation():
 
         m_flow, action = 0.0, "待機"
         
-        # 取り崩しを優先（取り崩し開始年齢以降は積立をしない）
+        # 取り崩しフェーズを優先
         if m_age >= first_wd_age:
             if active_wd and active_wd["val"] > 0:
                 if active_wd["mode"] == "定額 (円)":
@@ -102,6 +104,7 @@ def run_simulation():
                 else:
                     m_flow = -(current_bal * (active_wd["val"] / 100)) / 12
                 action = "取り崩し"
+        # 取り崩し開始より前であれば積立を実行
         elif active_dep and m_age >= active_dep["age"] and active_dep["val"] > 0:
             m_flow = float(active_dep["val"])
             sim_genpon += m_flow
@@ -118,14 +121,16 @@ def run_simulation():
     return pd.DataFrame(log)
 
 # --- 5. 表示エリア ---
-if first_wd_age < last_dep_age:
-    st.warning(f"⚠️ 設定を確認してください：積立設定（最大 {last_dep_age}歳）が取り崩し開始（{first_wd_age}歳）より後に存在します。このシミュレーションでは取り崩し開始年齢以降の積立は無視されます。")
+# 取り崩し開始年齢 <= いずれかの積立開始年齢 の場合に警告
+invalid_deposits = [a for a in active_dep_ages if first_wd_age <= a]
+if invalid_deposits:
+    st.warning(f"⚠️ **設定の矛盾を検知しました**：取り崩しが {first_wd_age}歳 から開始されるため、それ以降の積立設定（{min(invalid_deposits)}歳〜）はシミュレーションに反映されません。積立を続けたい場合は、取り崩し開始年齢を遅らせてください。")
 
 if initial_sum == 0 and not any(s["val"] > 0 for s in deposits_list):
     st.info("👈 左側のメニューから設定を入力してください。")
 else:
     df = run_simulation()
-    avg_r = (sum(s["val"] for s in rates_list) / len(rates_list)) if rates_list else 0 # 簡易平均
+    avg_r = (sum(s["val"] for s in rates_list) / len(rates_list)) if rates_list else 0
     
     if not df.empty:
         c1, c2 = st.columns(2)
