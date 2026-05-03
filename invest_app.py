@@ -24,21 +24,24 @@ end_p = get_p("end", 85)
 end_age = int(st.sidebar.slider("終了年齢", current_age, 100, int(max(current_age, end_p)), key="end"))
 initial_sum = int(st.sidebar.number_input("現在の一括投資額 (円)", 0, None, int(get_p("init", 0)), 100000, key="init"))
 
+# 動的な段階設定用関数
 def dynamic_settings(label, prefix, default_val, is_rate=False, is_withdrawal=False):
     with st.sidebar.expander(label):
         count = int(st.number_input(f"{label}の段階数", 1, 5, int(get_p(f"{prefix}_c", 1)), key=f"{prefix}_c"))
-        settings = []
+        res_list = []
         for i in range(count):
             st.markdown(f"**第 {i+1} 段階**")
             col1, col2 = st.columns(2)
+            
             row_mode = "定額 (円)"
             if is_withdrawal:
                 row_mode = col1.selectbox(f"方法 {i+1}", ["定額 (円)", "定率 (%)"], 
                                          index=0 if str(get_p(f"{prefix}_m{i}", "定額 (円)")) == "定額 (円)" else 1, 
                                          key=f"{prefix}_m{i}")
             
-            min_a = current_age if i == 0 else settings[i-1]["age"]
+            min_a = current_age if i == 0 else res_list[i-1]["age"]
             raw_val = get_p(f"{prefix}_v{i}", default_val)
+            
             if is_rate or (is_withdrawal and row_mode == "定率 (%)"):
                 f_val = float(raw_val)
                 if f_val > 100: f_val = 4.0
@@ -50,12 +53,14 @@ def dynamic_settings(label, prefix, default_val, is_rate=False, is_withdrawal=Fa
             saved_a = int(get_p(f"{prefix}_a{i}", min_a))
             safe_a = int(min(max(min_a, saved_a), end_age))
             age = int(col2.number_input(f"開始年齢 {i+1}", min_a, end_age, safe_a, key=f"{prefix}_a{i}"))
-            settings.append({"val": val, "age": age, "mode": row_mode})
-        return settings
+            
+            res_list.append({"val": val, "age": age, "mode": row_mode})
+        return res_list
 
-deposits = dynamic_settings("💰 積立設定", "dep", 50000)
-rates = dynamic_settings("📉 年率設定", "rate", 3.0, is_rate=True)
-withdrawals = dynamic_settings("🚪 取り崩し設定", "wd", 150000, is_withdrawal=True)
+# 各設定リストを確実に受け取る
+deposits_list = dynamic_settings("💰 積立設定", "dep", 50000)
+rates_list = dynamic_settings("📉 年率設定", "rate", 3.0, is_rate=True)
+withdrawals_list = dynamic_settings("🚪 取り崩し設定", "wd", 150000, is_withdrawal=True)
 
 with st.sidebar.expander("🏥 臨時収支の設定"):
     exp_c = int(st.number_input("件数", 0, 5, int(get_p("exp_c", 0)), key="exp_c"))
@@ -68,7 +73,7 @@ with st.sidebar.expander("🏥 臨時収支の設定"):
         a = int(col2.number_input(f"年齢 {i+1}", current_age, end_age, safe_ea, key=f"ea{i}"))
         if v != 0: special_events.append({"val": v, "age": a})
 
-# --- 4. 計算ロジック (根本から修正) ---
+# --- 4. 計算ロジック ---
 def run_simulation():
     balance = float(initial_sum)
     cum_inv = float(initial_sum)
@@ -76,47 +81,51 @@ def run_simulation():
     total_months = (end_age - current_age) * 12
     event_dict = {int((e["age"] - current_age) * 12 + 1): e["val"] for e in special_events}
     
+    # 取り崩しが「実質的に開始」される最小年齢を探す
+    active_w_ages = [s["age"] for s in withdrawals_list if s["val"] > 0]
+    first_w_age = min(active_w_ages) if active_w_ages else 999
+
     for m in range(1, total_months + 1):
         p_age = current_age + ((m - 1) / 12)
         d_age = int(p_age)
         
-        # 今月の適用設定を検索するローカル関数
-        def get_current(s_list, target_age):
-            active = None
+        # 指定年齢に合致する設定を探す関数
+        def get_current_setting(s_list, target_age):
+            active = s_list[0] if s_list else None
             for s in s_list:
                 if target_age >= s["age"]: active = s
             return active
 
-        # 1. 利率の取得
-        active_rate = get_current(rates, p_age)
-        curr_rate = active_rate["val"] if active_rate else 0.0
+        # 利率
+        s_rate = get_current_setting(rates_list, p_age)
+        curr_rate = s_rate["val"] if s_rate else 0.0
         
-        # 2. 臨時収支
+        # 臨時収支
         ev_val = float(event_dict.get(m, 0))
         balance += ev_val
         if ev_val > 0: cum_inv += ev_val
 
-        # 3. 積立 vs 取り崩しの判定
-        # その年齢で「有効（値が0より大きい）」な設定があるかを確認
-        active_w = get_current(withdrawals, p_age)
-        active_d = get_current(deposits, p_age)
-        
         m_flow, action = 0.0, "待機"
         
-        # 取り崩し設定があり、かつ開始年齢に達している場合を最優先
-        if active_w and active_w["val"] > 0:
-            if active_w["mode"] == "定額 (円)":
-                m_flow = -float(active_w["val"])
-            else:
-                m_flow = -(balance * (float(active_w["val"]) / 100)) / 12
-            action = "取り崩し"
-        # 取り崩しがない場合のみ積立を行う
-        elif active_d and active_d["val"] > 0:
-            m_flow = float(active_d["val"])
-            cum_inv += m_flow
-            action = "積立"
+        # フェーズ判定
+        if p_age >= first_w_age:
+            # 取り崩し期
+            s_w = get_current_setting(withdrawals_list, p_age)
+            if s_w and s_w["val"] > 0:
+                if s_w["mode"] == "定額 (円)":
+                    m_flow = -float(s_w["val"])
+                else:
+                    m_flow = -(balance * (float(s_w["val"]) / 100)) / 12
+                action = "取り崩し"
+        else:
+            # 積立期
+            s_d = get_current_setting(deposits_list, p_age)
+            if s_d and s_d["val"] > 0 and p_age >= s_d["age"]:
+                m_flow = float(s_d["val"])
+                cum_inv += m_flow
+                action = "積立"
             
-        # 4. 残高更新（収支を適用して、その結果に月利をかける）
+        # 残高更新
         balance = max(0.0, balance + m_flow)
         balance *= (1 + (curr_rate / 100) / 12)
         
@@ -129,7 +138,7 @@ def run_simulation():
     return pd.DataFrame(data)
 
 # --- 5. 表示エリア ---
-has_input = (initial_sum > 0 or any(s["val"] > 0 for s in deposits))
+has_input = (initial_sum > 0 or any(s["val"] > 0 for s in deposits_list))
 if not has_input:
     st.info("👈 左側のメニューから設定を入力してください。")
 else:
@@ -151,9 +160,9 @@ else:
         fig.add_trace(go.Scatter(x=df_g["年齢(グラフ)"], y=df_g["資産(万円)"], name="資産残高", line=dict(color="#1f77b4", width=3)))
         fig.add_trace(go.Scatter(x=df_g["年齢(グラフ)"], y=df_g["元本(万円)"], name="投資元本", line=dict(color="#ff7f0e", width=2, dash="dash")))
         fig.update_layout(margin=dict(l=10,r=10,t=10,b=10), height=400, hovermode="x unified", legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1), template="plotly_white")
-        gc, zc = "rgba(128,128,128,0.3)", "gray"
-        fig.update_xaxes(title="年齢", range=[current_age-1, end_age+1], dtick=5, showgrid=True, gridcolor=gc, griddash='dot', zeroline=True, zerolinecolor=zc, zerolinewidth=2)
-        fig.update_yaxes(title="金額 (万円)", range=[-max_v*0.05, max_v*1.15], ticksuffix="万", tickformat=",", showgrid=True, gridcolor=gc, griddash='dot', zeroline=True, zerolinecolor=zc, zerolinewidth=2)
+        grid_c, zero_c = "rgba(128, 128, 128, 0.3)", "gray"
+        fig.update_xaxes(title="年齢", range=[current_age-1, end_age+1], dtick=5, showgrid=True, gridcolor=grid_c, griddash='dot', zeroline=True, zerolinecolor=zero_c, zerolinewidth=2)
+        fig.update_yaxes(title="金額 (万円)", range=[-max_v*0.05, max_v*1.15], ticksuffix="万", tickformat=",", showgrid=True, gridcolor=grid_c, griddash='dot', zeroline=True, zerolinecolor=zero_c, zerolinewidth=2)
         st.plotly_chart(fig, use_container_width=True)
         
         with st.expander("📊 詳細データ"):
