@@ -21,42 +21,48 @@ current_age = st.sidebar.number_input("現在の年齢", 0, 100, int(get_p("age"
 end_age = st.sidebar.slider("終了年齢", current_age, 100, int(max(current_age, get_p("end", 85))), key="end")
 initial_sum = st.sidebar.number_input("現在の一括投資額 (円)", 0, None, int(get_p("init", 0)), 100000, key="init")
 
-# 動的な設定値を管理するための関数
-def dynamic_settings(label, prefix, default_val, is_rate=False):
+# 動的な設定値を管理するための関数（開始年齢を自由化）
+def dynamic_settings(label, prefix, default_val, is_rate=False, is_withdrawal=False):
     with st.sidebar.expander(label):
         count = st.number_input(f"{label}の段階数", 1, 5, int(get_p(f"{prefix}_c", 1)), key=f"{prefix}_c")
+        
+        # 取り崩しの場合のみ、定額か定率かを選択
+        w_mode = "定額"
+        if is_withdrawal:
+            w_mode = st.radio(f"{label}の計算方法", ["定額 (円)", "定率 (%)"], 
+                              index=0 if get_p(f"{prefix}_m", "定額") == "定額 (円)" else 1, key=f"{prefix}_m")
+        
         settings = []
         for i in range(count):
+            st.markdown(f"**--- 第 {i+1} 段階 ---**")
             col1, col2 = st.columns(2)
-            val = col1.number_input(f"値 {i+1}", -15.0 if is_rate else 0, None, 
-                                   get_p(f"{prefix}_v{i}", default_val), 
-                                   step=0.1 if is_rate else 5000, key=f"{prefix}_v{i}")
-            if i == 0:
-                age = current_age
-                col2.text_input(f"開始年齢", f"{age}歳", disabled=True, key=f"{prefix}_a{i}_d")
-            else:
-                prev_age = settings[i-1]["age"]
-                age = col2.number_input(f"切替年齢 {i+1}", int(prev_age), int(end_age), 
-                                       int(max(prev_age, get_p(f"{prefix}_a{i}", prev_age+10))), key=f"{prefix}_a{i}")
-            settings.append({"val": val, "age": age})
+            
+            # 1段目の開始年齢を自由化（ただし現在年齢が下限）
+            min_age_for_row = current_age if i == 0 else settings[i-1]["age"]
+            
+            val = col1.number_input(f"値", -15.0 if is_rate else 0.0, None, 
+                                   float(get_p(f"{prefix}_v{i}", default_val)), 
+                                   step=0.1 if (is_rate or w_mode=="定率 (%)") else 5000.0, key=f"{prefix}_v{i}")
+            
+            age = col2.number_input(f"開始年齢", int(min_age_for_row), int(end_age), 
+                                   int(max(min_age_for_row, get_p(f"{prefix}_a{i}", min_age_for_row))), key=f"{prefix}_a{i}")
+            
+            settings.append({"val": val, "age": age, "mode": w_mode})
         return settings
 
 # 各セクションの設定取得
-deposits = dynamic_settings("💰 積立設定", "dep", 50000)
+deposits = dynamic_settings("💰 積立設定", "dep", 50000.0)
 rates = dynamic_settings("📉 年率設定", "rate", 3.0, is_rate=True)
-withdrawals_start_age = st.sidebar.slider("取り崩し開始年齢", current_age, end_age, int(max(current_age, get_p("wa", 65))), key="wa")
-withdrawals = dynamic_settings("🚪 取り崩し額設定", "wd", 100000)
+withdrawals = dynamic_settings("🚪 取り崩し設定", "wd", 100000.0, is_withdrawal=True)
 
-# --- 臨時出費の設定 (ここを5段階対応に拡張) ---
-with st.sidebar.expander("🏥 臨時出費の設定"):
+with st.sidebar.expander("🏥 臨時出費設定"):
     exp_count = st.number_input("出費の件数", 0, 5, int(get_p("exp_c", 0)), key="exp_c")
     special_expenses = []
     for i in range(exp_count):
         c1, c2 = st.columns(2)
-        v = c1.number_input(f"出費{i+1}：額(円)", 0, None, int(get_p(f"ev{i}", 0)), 100000, key=f"ev{i}")
-        a = c2.number_input(f"出費{i+1}：年齢", current_age, end_age, int(max(current_age, get_p(f"ea{i}", current_age+10))), key=f"ea{i}")
-        if v > 0:
-            special_expenses.append({"val": v, "age": a})
+        v = c1.number_input(f"額(円)", 0, None, int(get_p(f"ev{i}", 0)), 100000, key=f"ev{i}")
+        a = c2.number_input(f"年齢", current_age, end_age, int(max(current_age, get_p(f"ea{i}", current_age))), key=f"ea{i}")
+        if v > 0: special_expenses.append({"val": v, "age": a})
 
 # --- 4. 計算ロジック ---
 def run_simulation():
@@ -64,56 +70,60 @@ def run_simulation():
     cum_inv = initial_sum
     data = []
     total_months = (end_age - current_age) * 12
-    
-    # 臨時出費を月ベースに変換
-    expense_dict = {}
-    for e in special_expenses:
-        m_idx = int((e["age"] - current_age) * 12 + 1)
-        expense_dict[m_idx] = expense_dict.get(m_idx, 0) + e["val"]
+    expense_dict = {int((e["age"] - current_age) * 12 + 1): e["val"] for e in special_expenses}
     
     for m in range(1, total_months + 1):
         p_age = current_age + (m / 12)
         d_age = int(p_age - 0.00001)
         
-        def get_current_v(s_list, target_age):
-            res = s_list[0]["val"]
+        # 設定リストから現在の年齢に該当する値を探す関数
+        def find_v(s_list, target_age):
+            active_v = 0
+            active_mode = "定額"
             for s in s_list:
-                if target_age >= s["age"]: res = s["val"]
-            return res
+                if target_age >= s["age"]:
+                    active_v = s["val"]
+                    active_mode = s.get("mode", "定額")
+            return active_v, active_mode
 
-        # 利率
-        ann_rate = get_current_v(rates, p_age) / 100
-        # 臨時出費の実行
-        current_exp = expense_dict.get(m, 0)
-        balance = max(0, balance - current_exp)
+        ann_rate, _ = find_v(rates, p_age)
+        balance = max(0, balance - expense_dict.get(m, 0))
+        
+        # 積立・取り崩しの判定と計算
+        # 1. まず取り崩し設定があるかチェック
+        w_val, w_mode = find_v(withdrawals, p_age)
+        d_val, _ = find_v(deposits, p_age)
         
         m_flow = 0
-        if p_age > withdrawals_start_age:
-            m_flow = -get_current_v(withdrawals, p_age)
+        action = "待機"
+        
+        # 同一月に積立と取り崩しが重なる場合は取り崩し優先（または開始年齢で判定）
+        if w_val > 0 and p_age >= min([s["age"] for s in withdrawals if s["val"] > 0], default=999):
+            if w_mode == "定額 (円)":
+                m_flow = -w_val
+            else:
+                m_flow = -(balance * (w_val / 100)) / 12
             action = "取り崩し"
-        else:
-            m_flow = get_current_v(deposits, p_age)
+        elif d_val > 0:
+            m_flow = d_val
             cum_inv += m_flow
             action = "積立"
             
-        balance = max(0, balance + m_flow) * (1 + ann_rate / 12)
-        data.append({"年齢(グラフ)": p_age, "年齢": d_age, "月": f"{(m-1)%12+1}ヶ月", "区分": action, "月間収支": int(m_flow), "臨時出費": int(current_exp), "元本": int(cum_inv), "資産残高": int(balance)})
-        if balance <= 0 and p_age > withdrawals_start_age: break
+        balance = max(0, balance + m_flow) * (1 + (ann_rate/100) / 12)
+        data.append({"年齢(グラフ)": p_age, "年齢": d_age, "月": f"{(m-1)%12+1}ヶ月", "区分": action, "月間収支": int(m_flow), "元本": int(cum_inv), "資産残高": int(balance)})
+        if balance <= 0 and action == "取り崩し": break
     return pd.DataFrame(data)
 
 # --- 5. 表示エリア ---
-has_input = (initial_sum > 0 or deposits[0]["val"] > 0)
-if not has_input:
+if initial_sum == 0 and not any(s["val"] > 0 for s in deposits):
     st.info("👈 左側のメニューから投資額や積立額を入力してください。")
 else:
     df = run_simulation()
     f_bal = df.iloc[-1]['資産残高']
-    
     c1, c2 = st.columns(2)
-    with c1: st.metric(f"{end_age}歳時点の資産", f"¥{f_bal:,}")
-    with c2:
-        if f_bal <= 0: st.error(f"⚠️ {int(df.iloc[-1]['年齢(グラフ)'])}歳で資産消滅")
-        else: st.success("✅ 資産を維持できています")
+    c1.metric(f"{end_age}歳時点の資産", f"¥{f_bal:,}")
+    if f_bal <= 0: c2.error(f"⚠️ {int(df.iloc[-1]['年齢(グラフ)'])}歳で資産消滅")
+    else: c2.success("✅ 資産を維持できています")
 
     max_v = max(df["資産残高"].max(), df["元本"].max()) / 10000
     fig = go.Figure()
@@ -126,8 +136,9 @@ else:
     st.plotly_chart(fig, use_container_width=True)
     
     with st.expander("📊 詳細データ"):
-        st.dataframe(df[["年齢", "月", "区分", "月間収支", "臨時出費", "元本", "資産残高"]], use_container_width=True, hide_index=True)
+        st.dataframe(df[["年齢", "月", "区分", "月間収支", "元本", "資産残高"]], use_container_width=True, hide_index=True)
     st.download_button(label="📥 CSV保存", data=df.to_csv(index=False).encode('utf-8-sig'), file_name="sim_result.csv", mime="text/csv")
 
 # --- 6. URLクエリパラメータ更新 ---
 st.query_params.update({k: v for k, v in st.session_state.items() if not k.startswith("FormSubmit")})
+
