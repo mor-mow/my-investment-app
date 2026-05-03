@@ -1,6 +1,5 @@
 import streamlit as st
 import pandas as pd
-import plotly.express as px
 import plotly.graph_objects as go
 
 # 1. ページ基本設定
@@ -37,26 +36,29 @@ with st.sidebar.expander("💰 積立の設定（2段階）"):
     d2_def = get_param("d2", 0)
     dep2 = st.number_input("変更後の月間積立 (円)", 0, None, int(d2_def), 5000, key="input_d2")
 
-st.sidebar.header("📉 年率設定")
+st.sidebar.header("📉 年率設定（3段階）")
 is_simple = st.sidebar.checkbox("年率を全期間で固定する", value=True, key="input_simple")
 if is_simple:
     fr_def = get_param("fr", 3.0)
     fixed_rate = st.sidebar.slider("固定年率 (%)", -15.0, 15.0, float(fr_def), 0.1, key="input_fr") / 100
 else:
-    with st.sidebar.expander("年率の詳細設定（3段階）", expanded=True):
-        r1 = st.slider("年率①：初期 (%)", -15.0, 15.0, 5.0, 0.1, key="input_r1") / 100
-        cr1 = st.slider("②への切替年齢", int(current_age), int(end_age), 45, key="input_cr1")
-        r2 = st.slider("年率②：中期 (%)", -15.0, 15.0, 3.0, 0.1, key="input_r2") / 100
-        cr2 = st.slider("③への切替年齢", int(cr1), int(end_age), 65, key="input_cr2")
-        r3 = st.slider("年率③：後期 (%)", -15.0, 15.0, 1.0, 0.1, key="input_r3") / 100
+    r1 = st.sidebar.slider("年率①：初期 (%)", -15.0, 15.0, 5.0, 0.1, key="input_r1") / 100
+    cr1 = st.sidebar.slider("②への切替年齢", int(current_age), int(end_age), 45, key="input_cr1")
+    r2 = st.sidebar.slider("年率②：中期 (%)", -15.0, 15.0, 3.0, 0.1, key="input_r2") / 100
+    cr2 = st.sidebar.slider("③への切替年齢", int(cr1), int(end_age), 65, key="input_cr2")
+    r3 = st.sidebar.slider("年率③：後期 (%)", -15.0, 15.0, 1.0, 0.1, key="input_r3") / 100
 
-st.sidebar.header("🚪 取り崩し設定")
+st.sidebar.header("🚪 取り崩し設定（2段階）")
 w_age_def = get_param("wa", 65)
-withdrawal_start_age = st.sidebar.slider("取り崩し開始年齢", int(current_age), int(end_age), int(max(current_age, w_age_def)), key="input_wa")
-w_type_def = get_param("wt", "定額 (円)")
-withdrawal_type = st.sidebar.radio("方法", ["定額 (円)", "定率 (%)"], index=0 if w_type_def == "定額 (円)" else 1, key="input_wt")
-w_val_def = get_param("wv", 150000 if withdrawal_type == "定額 (円)" else 4.0)
-withdrawal_val = st.sidebar.number_input("引出額(月額) または 引出率(年率%)", 0.0, None, float(w_val_def), 5000.0 if withdrawal_type == "定額 (円)" else 0.1, key="input_wv")
+w_start_age = st.sidebar.slider("取り崩し開始年齢", int(current_age), int(end_age), int(max(current_age, w_age_def)), key="input_wa")
+
+with st.sidebar.expander("取り崩し額の設定"):
+    wv1_def = get_param("wv1", 150000)
+    w_val1 = st.number_input("初期の月額 (円)", 0, None, int(wv1_def), 5000, key="input_wv1")
+    w_ch_age_def = get_param("wca", 75)
+    w_change_age = st.slider("額を変える年齢", int(w_start_age), int(end_age), int(max(w_start_age, w_ch_age_def)), key="input_wca")
+    wv2_def = get_param("wv2", 100000)
+    w_val2 = st.number_input("変更後の月額 (円)", 0, None, int(wv2_def), 5000, key="input_wv2")
 
 # --- 4. 計算ロジック ---
 def run_simulation():
@@ -77,18 +79,15 @@ def run_simulation():
         # 2. 収支の決定
         m_flow = 0.0
         act = "待機"
-        if m_age >= withdrawal_start_age:
+        if m_age >= w_start_age:
             act = "取り崩し"
-            if withdrawal_type == "定額 (円)":
-                m_flow = -float(withdrawal_val)
-            else:
-                m_flow = -(balance * (withdrawal_val / 100)) / 12
+            m_flow = -float(w_val1 if m_age < w_change_age else w_val2)
         else:
             act = "積立"
             m_flow = float(dep1 if m_age < dep_change_age else dep2)
             cum_inv += m_flow
             
-        # 3. 残高更新（収支を反映してから利息）
+        # 3. 残高更新（収支反映 → 利息）
         balance = max(0.0, balance + m_flow)
         balance *= (1 + rate / 12)
         
@@ -114,16 +113,20 @@ else:
         f_age = df.iloc[-1]['年齢(グラフ)']
         
         c1, c2 = st.columns(2)
-        with c1: st.metric(f"{end_age}歳時点の資産", f"¥{f_bal:,}")
+        with c1: st.metric(f"{end_age}歳時点の予想資産", f"¥{f_bal:,}")
         with c2:
             if f_bal <= 0: st.error(f"⚠️ {int(f_age)}歳で資産消滅")
             else: st.success("✅ 資産を維持できています")
 
         # グラフ作成
-        max_v = max(df["資産残高"].max(), df["元本"].max()) / 10000
+        df_g = df.copy()
+        df_g["資産(万円)"] = df_g["資産残高"] / 10000
+        df_g["元本(万円)"] = df_g["元本"] / 10000
+        max_v = max(df_g["資産(万円)"].max(), df_g["元本(万円)"].max(), 10.0)
+        
         fig = go.Figure()
-        fig.add_trace(go.Scatter(x=df["年齢(グラフ)"], y=df["資産残高"]/10000, name="資産残高", line=dict(color="#1f77b4", width=3)))
-        fig.add_trace(go.Scatter(x=df["年齢(グラフ)"], y=df["元本"]/10000, name="投資元本", line=dict(color="#ff7f0e", dash="dash")))
+        fig.add_trace(go.Scatter(x=df_g["年齢(グラフ)"], y=df_g["資産(万円)"], name="資産残高", line=dict(color="#1f77b4", width=3)))
+        fig.add_trace(go.Scatter(x=df_g["年齢(グラフ)"], y=df_g["元本(万円)"], name="投資元本", line=dict(color="#ff7f0e", dash="dash")))
         
         fig.update_layout(
             margin=dict(l=10,r=10,t=10,b=10), height=400, hovermode="x unified",
@@ -139,7 +142,7 @@ else:
             st.dataframe(df[["年齢", "月", "区分", "月間収支", "元本", "資産残高"]], use_container_width=True, hide_index=True)
         st.download_button(label="📥 CSV保存", data=df.to_csv(index=False).encode('utf-8-sig'), file_name="sim.csv", mime="text/csv")
 
-# --- 6. URLクエリパラメータ更新 ---
-new_p = {"age": current_age, "end": end_age, "init": initial_sum, "d1": dep1, "cd": dep_change_age, "d2": dep2, "wa": withdrawal_start_age, "wt": withdrawal_type, "wv": withdrawal_val}
+# --- 6. URLパラメータ更新 ---
+new_p = {"age": current_age, "end": end_age, "init": initial_sum, "d1": dep1, "cd": dep_change_age, "d2": dep2, "wa": w_start_age, "wv1": w_val1, "wca": w_change_age, "wv2": w_val2}
 if is_simple: new_p["fr"] = fixed_rate * 100
 st.query_params.update(**new_p)
