@@ -21,10 +21,8 @@ def get_param(key, default):
 st.sidebar.header("⚙️ 基本設定")
 c_age_val = get_param("age", 30)
 current_age = st.sidebar.number_input("現在の年齢", 0, 100, int(c_age_val), key="input_age")
-
 e_age_def = get_param("end", 85)
 end_age = st.sidebar.slider("終了年齢", int(current_age), 100, int(max(current_age, e_age_def)), key="input_end")
-
 init_def = get_param("init", 0)
 initial_sum = st.sidebar.number_input("現在の一括投資額 (円)", 0, None, int(init_def), 100000, key="input_init")
 
@@ -49,16 +47,21 @@ else:
     r3 = st.sidebar.slider("年率③：後期 (%)", -15.0, 15.0, 1.0, 0.1, key="input_r3") / 100
 
 st.sidebar.header("🚪 取り崩し設定（2段階）")
-w_age_def = get_param("wa", 65)
-w_start_age = st.sidebar.slider("取り崩し開始年齢", int(current_age), int(end_age), int(max(current_age, w_age_def)), key="input_wa")
+w_start_age = st.sidebar.slider("取り崩し開始年齢", int(current_age), int(end_age), int(max(current_age, get_param("wa", 65))), key="input_wa")
 
-with st.sidebar.expander("取り崩し額の設定"):
-    wv1_def = get_param("wv1", 150000)
-    w_val1 = st.number_input("初期の月額 (円)", 0, None, int(wv1_def), 5000, key="input_wv1")
-    w_ch_age_def = get_param("wca", 75)
-    w_change_age = st.slider("額を変える年齢", int(w_start_age), int(end_age), int(max(w_start_age, w_ch_age_def)), key="input_wca")
-    wv2_def = get_param("wv2", 100000)
-    w_val2 = st.number_input("変更後の月額 (円)", 0, None, int(wv2_def), 5000, key="input_wv2")
+with st.sidebar.expander("取り崩し①の設定"):
+    wt1_def = get_param("wt1", "定額 (円)")
+    wt1 = st.radio("方法①", ["定額 (円)", "定率 (%)"], index=0 if wt1_def == "定額 (円)" else 1, key="input_wt1")
+    wv1_def = get_param("wv1", 150000.0 if wt1 == "定額 (円)" else 4.0)
+    wv1 = st.number_input("額/率①", 0.0, None, float(wv1_def), step=5000.0 if wt1=="定額 (円)" else 0.1, key="input_wv1")
+
+w_change_age = st.sidebar.slider("設定を切り替える年齢", int(w_start_age), int(end_age), int(max(w_start_age, get_param("wca", 75))), key="input_wca")
+
+with st.sidebar.expander("取り崩し②の設定"):
+    wt2_def = get_param("wt2", "定額 (円)")
+    wt2 = st.radio("方法②", ["定額 (円)", "定率 (%)"], index=0 if wt2_def == "定額 (円)" else 1, key="input_wt2")
+    wv2_def = get_param("wv2", 100000.0 if wt2 == "定額 (円)" else 3.0)
+    wv2 = st.number_input("額/率②", 0.0, None, float(wv2_def), step=5000.0 if wt2=="定額 (円)" else 0.1, key="input_wv2")
 
 # --- 4. 計算ロジック ---
 def run_simulation():
@@ -71,34 +74,33 @@ def run_simulation():
         m_age = current_age + (m-1)/12
         
         # 1. 利率の決定
-        if is_simple:
-            rate = fixed_rate
-        else:
-            rate = r1 if m_age < cr1 else r2 if m_age < cr2 else r3
+        rate = fixed_rate if is_simple else (r1 if m_age < cr1 else r2 if m_age < cr2 else r3)
             
         # 2. 収支の決定
         m_flow = 0.0
         act = "待機"
         if m_age >= w_start_age:
             act = "取り崩し"
-            m_flow = -float(w_val1 if m_age < w_change_age else w_val2)
+            # 段階の判定
+            current_wt = wt1 if m_age < w_change_age else wt2
+            current_wv = wv1 if m_age < w_change_age else wv2
+            
+            if current_wt == "定額 (円)":
+                m_flow = -float(current_wv)
+            else:
+                m_flow = -(balance * (current_wv / 100)) / 12
         else:
             act = "積立"
             m_flow = float(dep1 if m_age < dep_change_age else dep2)
             cum_inv += m_flow
             
-        # 3. 残高更新（収支反映 → 利息）
+        # 3. 【重要】残高更新：収支を引いてから、利息
         balance = max(0.0, balance + m_flow)
         balance *= (1 + rate / 12)
         
         data.append({
-            "年齢(グラフ)": round(m_age + 1/12, 2),
-            "年齢": int(m_age),
-            "月": f"{(m-1)%12+1}ヶ月目",
-            "区分": act,
-            "月間収支": int(m_flow),
-            "元本": int(cum_inv),
-            "資産残高": int(balance)
+            "年齢(グラフ)": round(m_age + 1/12, 2), "年齢": int(m_age), "月": f"{(m-1)%12+1}ヶ月目",
+            "区分": act, "月間収支": int(m_flow), "元本": int(cum_inv), "資産残高": int(balance)
         })
         if balance <= 0 and act == "取り崩し": break
     return pd.DataFrame(data)
@@ -109,40 +111,20 @@ if initial_sum == 0 and dep1 == 0 and dep2 == 0:
 else:
     df = run_simulation()
     if not df.empty:
-        f_bal = df.iloc[-1]['資産残高']
-        f_age = df.iloc[-1]['年齢(グラフ)']
-        
-        c1, c2 = st.columns(2)
-        with c1: st.metric(f"{end_age}歳時点の予想資産", f"¥{f_bal:,}")
-        with c2:
-            if f_bal <= 0: st.error(f"⚠️ {int(f_age)}歳で資産消滅")
-            else: st.success("✅ 資産を維持できています")
-
-        # グラフ作成
-        df_g = df.copy()
-        df_g["資産(万円)"] = df_g["資産残高"] / 10000
-        df_g["元本(万円)"] = df_g["元本"] / 10000
-        max_v = max(df_g["資産(万円)"].max(), df_g["元本(万円)"].max(), 10.0)
-        
+        st.metric(f"{end_age}歳時点の予想資産", f"¥{df.iloc[-1]['資産残高']:,}")
+        max_v = max(df["資産残高"].max(), df["元本"].max()) / 10000
         fig = go.Figure()
-        fig.add_trace(go.Scatter(x=df_g["年齢(グラフ)"], y=df_g["資産(万円)"], name="資産残高", line=dict(color="#1f77b4", width=3)))
-        fig.add_trace(go.Scatter(x=df_g["年齢(グラフ)"], y=df_g["元本(万円)"], name="投資元本", line=dict(color="#ff7f0e", dash="dash")))
-        
-        fig.update_layout(
-            margin=dict(l=10,r=10,t=10,b=10), height=400, hovermode="x unified",
-            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
-            template="plotly_white"
-        )
+        fig.add_trace(go.Scatter(x=df["年齢(グラフ)"], y=df["資産残高"]/10000, name="資産残高", line=dict(color="#1f77b4", width=3)))
+        fig.add_trace(go.Scatter(x=df["年齢(グラフ)"], y=df["元本"]/10000, name="投資元本", line=dict(color="#ff7f0e", dash="dash")))
+        fig.update_layout(margin=dict(l=10,r=10,t=10,b=10), height=400, hovermode="x unified", legend=dict(orientation="h", y=1.02, x=1), template="plotly_white")
         grid_c, zero_c = "rgba(128, 128, 128, 0.3)", "gray"
-        fig.update_xaxes(title="年齢 (歳)", range=[current_age-1, end_age+1], dtick=5, showgrid=True, gridcolor=grid_c, griddash='dot', zeroline=True, zerolinecolor=zero_c, zerolinewidth=2)
-        fig.update_yaxes(title="金額 (万円)", range=[-max_v*0.05, max_v*1.15], ticksuffix="万", tickformat=",", showgrid=True, gridcolor=grid_c, griddash='dot', zeroline=True, zerolinecolor=zero_c, zerolinewidth=2)
+        fig.update_xaxes(title="年齢", range=[current_age-1, end_age+1], dtick=5, showgrid=True, gridcolor=grid_c, griddash='dot', zeroline=True, zerolinecolor=zero_c, zerolinewidth=2)
+        fig.update_yaxes(title="万円", range=[-max_v*0.05, max_v*1.15], ticksuffix="万", tickformat=",", showgrid=True, gridcolor=grid_c, griddash='dot', zeroline=True, zerolinecolor=zero_c, zerolinewidth=2)
         st.plotly_chart(fig, use_container_width=True)
-        
         with st.expander("📊 詳細データ"):
             st.dataframe(df[["年齢", "月", "区分", "月間収支", "元本", "資産残高"]], use_container_width=True, hide_index=True)
-        st.download_button(label="📥 CSV保存", data=df.to_csv(index=False).encode('utf-8-sig'), file_name="sim.csv", mime="text/csv")
 
 # --- 6. URLパラメータ更新 ---
-new_p = {"age": current_age, "end": end_age, "init": initial_sum, "d1": dep1, "cd": dep_change_age, "d2": dep2, "wa": w_start_age, "wv1": w_val1, "wca": w_change_age, "wv2": w_val2}
+new_p = {"age": current_age, "end": end_age, "init": initial_sum, "d1": dep1, "cd": dep_change_age, "d2": dep2, "wa": w_start_age, "wt1": wt1, "wv1": wv1, "wca": w_change_age, "wt2": wt2, "wv2": wv2}
 if is_simple: new_p["fr"] = fixed_rate * 100
 st.query_params.update(**new_p)
