@@ -68,7 +68,7 @@ with st.sidebar.expander("🏥 臨時収支の設定"):
         a = int(col2.number_input(f"年齢 {i+1}", current_age, end_age, safe_ea, key=f"ea{i}"))
         if v != 0: special_events.append({"val": v, "age": a})
 
-# --- 4. 計算ロジック (徹底修正) ---
+# --- 4. 計算ロジック (根本から修正) ---
 def run_simulation():
     balance = float(initial_sum)
     cum_inv = float(initial_sum)
@@ -76,52 +76,49 @@ def run_simulation():
     total_months = (end_age - current_age) * 12
     event_dict = {int((e["age"] - current_age) * 12 + 1): e["val"] for e in special_events}
     
-    # 有効な取り崩しの開始年齢（値が0より大きい設定の最小年齢）
-    w_start_age = min([s["age"] for s in withdrawals if s["val"] > 0], default=999)
-
     for m in range(1, total_months + 1):
-        p_age = current_age + ((m - 1) / 12) # 月の開始時点の年齢
+        p_age = current_age + ((m - 1) / 12)
         d_age = int(p_age)
         
-        # 1. 現在の適用設定を特定
-        def get_active(s_list, target_age):
-            active = s_list[0]
+        # 今月の適用設定を検索するローカル関数
+        def get_current(s_list, target_age):
+            active = None
             for s in s_list:
                 if target_age >= s["age"]: active = s
             return active
 
-        curr_rate = get_active(rates, p_age)["val"]
+        # 1. 利率の取得
+        active_rate = get_current(rates, p_age)
+        curr_rate = active_rate["val"] if active_rate else 0.0
         
-        # 2. 臨時収支の反映
+        # 2. 臨時収支
         ev_val = float(event_dict.get(m, 0))
         balance += ev_val
         if ev_val > 0: cum_inv += ev_val
 
+        # 3. 積立 vs 取り崩しの判定
+        # その年齢で「有効（値が0より大きい）」な設定があるかを確認
+        active_w = get_current(withdrawals, p_age)
+        active_d = get_current(deposits, p_age)
+        
         m_flow, action = 0.0, "待機"
         
-        # 3. 積立・取り崩しの判定 (ここを徹底修正)
-        if p_age >= w_start_age:
-            # 取り崩し期
-            active_w = get_active(withdrawals, p_age)
+        # 取り崩し設定があり、かつ開始年齢に達している場合を最優先
+        if active_w and active_w["val"] > 0:
             if active_w["mode"] == "定額 (円)":
                 m_flow = -float(active_w["val"])
             else:
-                # 定率取り崩し：(現在の残高 * 年率) / 12
                 m_flow = -(balance * (float(active_w["val"]) / 100)) / 12
             action = "取り崩し"
-        else:
-            # 積立期
-            active_d = get_active(deposits, p_age)
-            if p_age >= active_d["age"]:
-                m_flow = float(active_d["val"])
-                cum_inv += m_flow
-                action = "積立"
+        # 取り崩しがない場合のみ積立を行う
+        elif active_d and active_d["val"] > 0:
+            m_flow = float(active_d["val"])
+            cum_inv += m_flow
+            action = "積立"
             
-        # 4. 残高更新（収支を足し引きした後、プラス残高に対して利息計算）
-        # 金額を引く処理：balance + m_flow (m_flowはマイナス値)
+        # 4. 残高更新（収支を適用して、その結果に月利をかける）
         balance = max(0.0, balance + m_flow)
-        if balance > 0:
-            balance *= (1 + (float(curr_rate)/100) / 12)
+        balance *= (1 + (curr_rate / 100) / 12)
         
         data.append({
             "年齢(グラフ)": round(p_age + 1/12, 2), "年齢": d_age, "月": f"{(m-1)%12+1}ヶ月目", 
@@ -139,7 +136,7 @@ else:
     df = run_simulation()
     if not df.empty:
         f_bal = df.iloc[-1]['資産残高']
-        c1, col_avg, c2 = st.columns([2,1,2])
+        c1, c2 = st.columns(2)
         with c1: st.metric(f"{end_age}歳時点の予想資産", f"¥{f_bal:,}")
         with c2:
             if f_bal <= 0: st.error(f"⚠️ {int(df.iloc[-1]['年齢(グラフ)'])}歳で資産消滅")
@@ -153,8 +150,8 @@ else:
         fig = go.Figure()
         fig.add_trace(go.Scatter(x=df_g["年齢(グラフ)"], y=df_g["資産(万円)"], name="資産残高", line=dict(color="#1f77b4", width=3)))
         fig.add_trace(go.Scatter(x=df_g["年齢(グラフ)"], y=df_g["元本(万円)"], name="投資元本", line=dict(color="#ff7f0e", width=2, dash="dash")))
-        fig.update_layout(margin=dict(l=10,r=10,t=10,b=10), height=400, hovermode="x unified", legend=dict(orientation="h", y=1.1), template="plotly_white")
-        gc, zc = "rgba(128, 128, 128, 0.3)", "gray"
+        fig.update_layout(margin=dict(l=10,r=10,t=10,b=10), height=400, hovermode="x unified", legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1), template="plotly_white")
+        gc, zc = "rgba(128,128,128,0.3)", "gray"
         fig.update_xaxes(title="年齢", range=[current_age-1, end_age+1], dtick=5, showgrid=True, gridcolor=gc, griddash='dot', zeroline=True, zerolinecolor=zc, zerolinewidth=2)
         fig.update_yaxes(title="金額 (万円)", range=[-max_v*0.05, max_v*1.15], ticksuffix="万", tickformat=",", showgrid=True, gridcolor=gc, griddash='dot', zeroline=True, zerolinecolor=zc, zerolinewidth=2)
         st.plotly_chart(fig, use_container_width=True)
