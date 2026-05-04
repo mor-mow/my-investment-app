@@ -145,16 +145,26 @@ else:
         else:
             st.success("✅ 資産を維持できる見通しです")
 
-        # グラフ（x軸には小数点ありの「年齢_グラフ」を使用）
+        # グラフ
         fig = go.Figure()
         fig.add_trace(go.Scatter(x=df["年齢_グラフ"], y=df["資産(万円)"], name="資産残高", line=dict(color="#1f77b4", width=3), fill='tozeroy', fillcolor='rgba(31, 119, 180, 0.1)'))
         fig.add_trace(go.Scatter(x=df["年齢_グラフ"], y=df["元本(万円)"], name="投資元本", line=dict(color="#ff7f0e", dash="dash")))
-        fig.update_layout(hovermode="x unified", template="plotly_white", margin=dict(l=0, r=0, t=30, b=0),
-                          legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
-                          yaxis=dict(ticksuffix="万", tickformat=",d", separatethousands=True))
+        
+        fig.update_layout(
+            hovermode="x unified",
+            template="plotly_white",
+            margin=dict(l=0, r=0, t=10, b=0), # 上部の余白を詰め、凡例を下に配置
+            legend=dict(
+                orientation="h",       # 横並び
+                yanchor="top",         # 上端を基準に配置
+                y=-0.2,                # グラフの下側へ移動（マイナス値）
+                xanchor="center",      # 中央揃え
+                x=0.5
+            ),
+            yaxis=dict(ticksuffix="万", tickformat=",d", separatethousands=True)
+        )
         st.plotly_chart(fig, use_container_width=True)
 
-        # 📊 詳細データ（年齢を「整数」にして表示）
         with st.expander("📊 詳細データを確認する"):
             st.dataframe(df[["年齢", "月", "区分", "月間収支", "臨時収支", "資産(万円)", "元本(万円)"]], 
                          use_container_width=True, hide_index=True)
