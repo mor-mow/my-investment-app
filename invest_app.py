@@ -24,7 +24,6 @@ def get_p(key, default):
 st.sidebar.header("⚙️ 基本設定")
 current_age = st.sidebar.number_input("現在の年齢", 0, 100, int(get_p("age", 30)), key="age")
 end_age = st.sidebar.slider("終了年齢", current_age + 1, 100, int(max(current_age + 1, get_p("end", 85))), key="end")
-# 一括投資額を整数に
 initial_sum = int(st.sidebar.number_input("現在の一括投資額 (円)", 0, None, int(get_p("init", 1000000)), 100000, key="init"))
 
 def dynamic_settings(label, prefix, default_val, is_rate=False, is_withdrawal=False):
@@ -54,6 +53,16 @@ rates_list = dynamic_settings("📉 年率設定", "rate", 3.0, is_rate=True)
 withdrawals_list = dynamic_settings("🚪 取り崩し設定", "wd", 0, is_withdrawal=True)
 
 # --- 4. 計算ロジック ---
+def calculate_true_avg():
+    total_y = end_age - current_age
+    if total_y <= 0: return 0.0
+    w_sum = 0
+    for i, s in enumerate(rates_list):
+        start = s["age"]
+        nxt = rates_list[i+1]["age"] if i+1 < len(rates_list) else end_age
+        w_sum += s["val"] * max(0, nxt - start)
+    return w_sum / total_y
+
 def run_simulation():
     curr_bal = float(initial_sum)
     sim_genpon = float(initial_sum)
@@ -87,7 +96,6 @@ def run_simulation():
         curr_bal = max(0.0, curr_bal + m_flow)
         curr_bal *= (1 + (curr_rate / 100) / 12)
         
-        # ログ保存時に「万円」単位に変換し、小数点以下を丸める
         log.append({
             "年齢": round(m_age + 1/12, 2), 
             "資産(万円)": int(curr_bal / 10000), 
@@ -98,18 +106,19 @@ def run_simulation():
 
 # --- 5. 表示エリア ---
 df = run_simulation()
+avg_r = calculate_true_avg()
 
 if not df.empty:
     last_val = df.iloc[-1]["資産(万円)"]
     c1, c2, c3 = st.columns(3)
-    # 表示も整数カンマ区切りに
     c1.metric(f"{end_age}歳時点の資産", f"{int(last_val):,} 万円")
-    c2.metric("投資元本合計", f"{int(df.iloc[-1]['元本(万円)']):,} 万円")
+    c2.metric("全体の平均年率", f"{avg_r:.2f} %") # 年率表示を復活
+    c3.metric("投資元本合計", f"{int(df.iloc[-1]['元本(万円)']):,} 万円")
     
-    if last_val > 0:
-        c3.success("✅ 順調なプラン")
+    if last_val <= 0:
+        st.warning("⚠️ プランの見直しが必要かもしれません（資産が途中で底をつきます）")
     else:
-        c3.warning("⚠️ 見直し推奨")
+        st.success("✅ 資産を維持できる見込みです")
 
     fig = go.Figure()
     fig.add_trace(go.Scatter(x=df["年齢"], y=df["資産(万円)"], name="資産残高", line=dict(color="#1f77b4", width=3), fill='tozeroy', fillcolor='rgba(31, 119, 180, 0.1)'))
@@ -123,7 +132,7 @@ if not df.empty:
         yaxis=dict(
             title="単位：万円",
             ticksuffix="万",
-            tickformat=",d",  # 整数（d）でカンマ区切り
+            tickformat=",d",
             separatethousands=True
         )
     )
