@@ -52,6 +52,17 @@ deposits_list = dynamic_settings("💰 積立設定", "dep", 50000)
 rates_list = dynamic_settings("📉 年率設定", "rate", 3.0, is_rate=True)
 withdrawals_list = dynamic_settings("🚪 取り崩し設定", "wd", 0, is_withdrawal=True)
 
+# 🏥 臨時収支の設定（復活）
+with st.sidebar.expander("🏥 臨時収支の設定"):
+    exp_c = int(st.number_input("収支の件数", 0, 5, int(get_p("exp_c", 0)), key="exp_c"))
+    special_events = []
+    for i in range(exp_c):
+        st.markdown(f"**イベント {i+1}**")
+        col1, col2 = st.columns(2)
+        v = int(col1.number_input(f"金額 {i+1}", value=int(get_p(f"ev{i}", 0)), step=100000, key=f"ev{i}"))
+        a = int(col2.number_input(f"年齢 {i+1}", current_age, end_age, int(min(max(current_age, get_p(f"ea{i}", current_age)), end_age)), key=f"ea{i}"))
+        if v != 0: special_events.append({"val": v, "age": a})
+
 # --- 4. 計算ロジック ---
 def calculate_true_avg():
     total_y = end_age - current_age
@@ -69,20 +80,28 @@ def run_simulation():
     log = []
     total_months = (end_age - current_age) * 12
     
+    # 臨時収支の辞書化
+    event_dict = {int((e["age"] - current_age) * 12 + 1): e["val"] for e in special_events}
+    
     w_active_starts = [s["age"] for s in withdrawals_list if s["val"] > 0]
     first_wd_age = min(w_active_starts) if w_active_starts else 999
 
     for m in range(1, total_months + 1):
         m_age = current_age + ((m - 1) / 12)
         def get_setting(s_list):
-            active = s_list[0]
+            active = s_list
             for s in s_list:
                 if m_age >= s["age"]: active = s
             return active
 
         curr_rate = get_setting(rates_list)["val"]
-        m_flow = 0.0
         
+        # 臨時収支の適用（復活）
+        ev_val = float(event_dict.get(m, 0))
+        curr_bal += ev_val
+        if ev_val > 0: sim_genpon += ev_val
+
+        m_flow = 0.0
         if m_age >= first_wd_age:
             s_wd = get_setting(withdrawals_list)
             if s_wd["val"] > 0:
@@ -108,35 +127,36 @@ def run_simulation():
 df = run_simulation()
 avg_r = calculate_true_avg()
 
-if not df.empty:
-    last_val = df.iloc[-1]["資産(万円)"]
-    c1, c2, c3 = st.columns(3)
-    c1.metric(f"{end_age}歳時点の資産", f"{int(last_val):,} 万円")
-    c2.metric("全体の平均年率", f"{avg_r:.2f} %") # 年率表示を復活
-    c3.metric("投資元本合計", f"{int(df.iloc[-1]['元本(万円)']):,} 万円")
-    
-    if last_val <= 0:
-        st.warning("⚠️ プランの見直しが必要かもしれません（資産が途中で底をつきます）")
-    else:
-        st.success("✅ 資産を維持できる見込みです")
+# 初期表示ガード
+is_empty = (initial_sum == 0 and not any(s["val"] > 0 for s in deposits_list) and not special_events)
 
-    fig = go.Figure()
-    fig.add_trace(go.Scatter(x=df["年齢"], y=df["資産(万円)"], name="資産残高", line=dict(color="#1f77b4", width=3), fill='tozeroy', fillcolor='rgba(31, 119, 180, 0.1)'))
-    fig.add_trace(go.Scatter(x=df["年齢"], y=df["元本(万円)"], name="投資元本", line=dict(color="#ff7f0e", dash="dash")))
-    
-    fig.update_layout(
-        hovermode="x unified",
-        template="plotly_white",
-        margin=dict(l=0, r=0, t=30, b=0),
-        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
-        yaxis=dict(
-            title="単位：万円",
-            ticksuffix="万",
-            tickformat=",d",
-            separatethousands=True
+if is_empty:
+    st.info("👋 設定を入力してください。左メニューから積立や臨時収支を設定できます。")
+else:
+    if not df.empty:
+        last_val = df.iloc[-1]["資産(万円)"]
+        c1, c2, c3 = st.columns(3)
+        c1.metric(f"{end_age}歳時点の資産", f"{int(last_val):,} 万円")
+        c2.metric("全体の平均年率", f"{avg_r:.2f} %")
+        c3.metric("投資元本合計", f"{int(df.iloc[-1]['元本(万円)']):,} 万円")
+        
+        if last_val <= 0:
+            st.warning("⚠️ 途中で見直しが必要かもしれません（資産が枯渇する可能性があります）")
+        else:
+            st.success("✅ 資産を維持できる見込みです")
+
+        fig = go.Figure()
+        fig.add_trace(go.Scatter(x=df["年齢"], y=df["資産(万円)"], name="資産残高", line=dict(color="#1f77b4", width=3), fill='tozeroy', fillcolor='rgba(31, 119, 180, 0.1)'))
+        fig.add_trace(go.Scatter(x=df["年齢"], y=df["元本(万円)"], name="投資元本", line=dict(color="#ff7f0e", dash="dash")))
+        
+        fig.update_layout(
+            hovermode="x unified",
+            template="plotly_white",
+            margin=dict(l=0, r=0, t=30, b=0),
+            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+            yaxis=dict(title="単位：万円", ticksuffix="万", tickformat=",d", separatethousands=True)
         )
-    )
-    st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, use_container_width=True)
 
 # URL同期
 st.query_params.update({k: v for k, v in st.session_state.items() if not str(k).startswith("FormSubmit")})
