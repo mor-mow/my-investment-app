@@ -52,7 +52,6 @@ deposits_list = dynamic_settings("💰 積立設定", "dep", 50000)
 rates_list = dynamic_settings("📉 年率設定", "rate", 3.0, is_rate=True)
 withdrawals_list = dynamic_settings("🚪 取り崩し設定", "wd", 0, is_withdrawal=True)
 
-# 🏥 臨時収支の設定（復活）
 with st.sidebar.expander("🏥 臨時収支の設定"):
     exp_c = int(st.number_input("収支の件数", 0, 5, int(get_p("exp_c", 0)), key="exp_c"))
     special_events = []
@@ -79,8 +78,6 @@ def run_simulation():
     sim_genpon = float(initial_sum)
     log = []
     total_months = (end_age - current_age) * 12
-    
-    # 臨時収支の辞書化
     event_dict = {int((e["age"] - current_age) * 12 + 1): e["val"] for e in special_events}
     
     w_active_starts = [s["age"] for s in withdrawals_list if s["val"] > 0]
@@ -95,68 +92,71 @@ def run_simulation():
             return active
 
         curr_rate = get_setting(rates_list)["val"]
-        
-        # 臨時収支の適用（復活）
         ev_val = float(event_dict.get(m, 0))
         curr_bal += ev_val
         if ev_val > 0: sim_genpon += ev_val
 
-        m_flow = 0.0
+        m_flow, action = 0.0, "待機"
         if m_age >= first_wd_age:
             s_wd = get_setting(withdrawals_list)
             if s_wd["val"] > 0:
                 m_flow = -float(s_wd["val"]) if s_wd["mode"] == "定額 (円)" else -(curr_bal * (s_wd["val"] / 100)) / 12
+                action = "取り崩し"
         else:
             s_dep = get_setting(deposits_list)
             if m_age >= s_dep["age"]:
                 m_flow = float(s_dep["val"])
                 sim_genpon += m_flow
+                action = "積立"
         
         curr_bal = max(0.0, curr_bal + m_flow)
         curr_bal *= (1 + (curr_rate / 100) / 12)
         
         log.append({
             "年齢": round(m_age + 1/12, 2), 
+            "月": f"{(m-1)%12+1}ヶ月目",
+            "区分": action,
+            "月間収支": int(m_flow),
+            "臨時収支": int(ev_val),
             "資産(万円)": int(curr_bal / 10000), 
             "元本(万円)": int(sim_genpon / 10000)
         })
-        if curr_bal <= 0 and m_age >= first_wd_age: break
+        if curr_bal <= 0 and action == "取り崩し": break
     return pd.DataFrame(log)
 
 # --- 5. 表示エリア ---
 df = run_simulation()
 avg_r = calculate_true_avg()
-
-# 初期表示ガード
 is_empty = (initial_sum == 0 and not any(s["val"] > 0 for s in deposits_list) and not special_events)
 
 if is_empty:
-    st.info("👋 設定を入力してください。左メニューから積立や臨時収支を設定できます。")
+    st.info("👋 左メニューから設定を入力して、シミュレーションを開始してください。")
 else:
     if not df.empty:
-        last_val = df.iloc[-1]["資産(万円)"]
+        last_row = df.iloc[-1]
         c1, c2, c3 = st.columns(3)
-        c1.metric(f"{end_age}歳時点の資産", f"{int(last_val):,} 万円")
+        c1.metric(f"{end_age}歳時点の資産", f"{int(last_row['資産(万円)']):,} 万円")
         c2.metric("全体の平均年率", f"{avg_r:.2f} %")
-        c3.metric("投資元本合計", f"{int(df.iloc[-1]['元本(万円)']):,} 万円")
+        c3.metric("投資元本合計", f"{int(last_row['元本(万円)']):,} 万円")
         
-        if last_val <= 0:
-            st.warning("⚠️ 途中で見直しが必要かもしれません（資産が枯渇する可能性があります）")
+        if last_row['資産(万円)'] <= 0:
+            st.warning("⚠️ 資産の見直しが必要かもしれません")
         else:
-            st.success("✅ 資産を維持できる見込みです")
+            st.success("✅ 資産を維持できる見通しです")
 
+        # グラフ
         fig = go.Figure()
         fig.add_trace(go.Scatter(x=df["年齢"], y=df["資産(万円)"], name="資産残高", line=dict(color="#1f77b4", width=3), fill='tozeroy', fillcolor='rgba(31, 119, 180, 0.1)'))
         fig.add_trace(go.Scatter(x=df["年齢"], y=df["元本(万円)"], name="投資元本", line=dict(color="#ff7f0e", dash="dash")))
-        
-        fig.update_layout(
-            hovermode="x unified",
-            template="plotly_white",
-            margin=dict(l=0, r=0, t=30, b=0),
-            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
-            yaxis=dict(title="単位：万円", ticksuffix="万", tickformat=",d", separatethousands=True)
-        )
+        fig.update_layout(hovermode="x unified", template="plotly_white", margin=dict(l=0, r=0, t=30, b=0),
+                          legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+                          yaxis=dict(ticksuffix="万", tickformat=",d", separatethousands=True))
         st.plotly_chart(fig, use_container_width=True)
+
+        # 📊 詳細データと保存（復活）
+        with st.expander("📊 詳細データを確認する"):
+            st.dataframe(df[["年齢", "月", "区分", "月間収支", "臨時収支", "資産(万円)", "元本(万円)"]], use_container_width=True, hide_index=True)
+        st.download_button(label="📥 シミュレーション結果をCSVで保存", data=df.to_csv(index=False).encode('utf-8-sig'), file_name="asset_sim.csv", mime="text/csv")
 
 # URL同期
 st.query_params.update({k: v for k, v in st.session_state.items() if not str(k).startswith("FormSubmit")})
