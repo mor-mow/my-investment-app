@@ -23,6 +23,7 @@ def get_p(key, default):
 # --- 3. サイドバー設定エリア ---
 st.sidebar.header("⚙️ 基本設定")
 current_age = st.sidebar.number_input("現在の年齢", 0, 100, int(get_p("age", 30)), key="age")
+# 終了年齢を先に確定
 end_age = st.sidebar.slider("終了年齢", current_age + 1, 100, int(max(current_age + 1, get_p("end", 85))), key="end")
 initial_sum = int(st.sidebar.number_input("現在の一括投資額 (円)", 0, None, int(get_p("init", 1000000)), 100000, key="init"))
 
@@ -38,13 +39,20 @@ def dynamic_settings(label, prefix, default_val, is_rate=False, is_withdrawal=Fa
                 row_mode = col1.selectbox(f"方法 {i+1}", ["定額 (円)", "定率 (%)"], 
                                          index=0 if str(get_p(f"{prefix}_m{i}", "定額 (円)")) == "定額 (円)" else 1, 
                                          key=f"{prefix}_m{i}")
+            
             raw_v = get_p(f"{prefix}_v{i}", default_val)
+            # 安全策: 初期値が最小値と最大値の範囲内に収まるように調整
             min_a = current_age if i == 0 else res_list[i-1]["age"]
+            raw_a = int(get_p(f"{prefix}_a{i}", min_a))
+            safe_age = min(max(min_a, raw_a), end_age)
+
             if is_rate or (is_withdrawal and row_mode == "定率 (%)"):
                 val = col1.number_input(f"値 {i+1}", -15.0, 100.0, float(raw_v), 0.1, key=f"{prefix}_v{i}")
             else:
                 val = col1.number_input(f"円 {i+1}", 0, None, int(raw_v), 10000, key=f"{prefix}_v{i}")
-            age = col2.number_input(f"開始年齢 {i+1}", min_a, end_age, int(min(max(min_a, get_p(f"{prefix}_a{i}", min_a)), end_age)), key=f"{prefix}_a{i}")
+            
+            # valueがmax(end_age)を超えないよう制限をかけてエラーを防止
+            age = col2.number_input(f"開始年齢 {i+1}", min_a, end_age, safe_age, key=f"{prefix}_a{i}")
             res_list.append({"val": val, "age": age, "mode": row_mode})
         return res_list
 
@@ -59,7 +67,11 @@ with st.sidebar.expander("🏥 臨時収支の設定"):
         st.markdown(f"**イベント {i+1}**")
         col1, col2 = st.columns(2)
         v = int(col1.number_input(f"金額 {i+1}", value=int(get_p(f"ev{i}", 0)), step=100000, key=f"ev{i}"))
-        a = int(col2.number_input(f"年齢 {i+1}", current_age, end_age, int(min(max(current_age, get_p(f"ea{i}", current_age)), end_age)), key=f"ea{i}"))
+        
+        raw_ea = int(get_p(f"ea{i}", current_age))
+        safe_ea = min(max(current_age, raw_ea), end_age)
+        
+        a = int(col2.number_input(f"年齢 {i+1}", current_age, end_age, safe_ea, key=f"ea{i}"))
         if v != 0: special_events.append({"val": v, "age": a})
 
 # --- 4. 計算ロジック ---
@@ -86,7 +98,7 @@ def run_simulation():
     for m in range(1, total_months + 1):
         m_age = current_age + ((m - 1) / 12)
         def get_setting(s_list):
-            active = s_list[0]
+            active = s_list
             for s in s_list:
                 if m_age >= s["age"]: active = s
             return active
@@ -103,7 +115,6 @@ def run_simulation():
                 if s_wd["mode"] == "定額 (円)":
                     m_flow = -float(s_wd["val"])
                 else:
-                    # 定率計算の修正
                     m_flow = -(curr_bal * (float(s_wd["val"]) / 100) / 12)
                 action = "取り崩し"
         else:
@@ -155,16 +166,8 @@ else:
         fig.add_trace(go.Scatter(x=df["年齢_グラフ"], y=df["元本(万円)"], name="投資元本", line=dict(color="#ff7f0e", dash="dash")))
         
         fig.update_layout(
-            hovermode="x unified",
-            template="plotly_white",
-            margin=dict(l=0, r=0, t=10, b=0),
-            legend=dict(
-                orientation="h",
-                yanchor="top",
-                y=-0.2,
-                xanchor="center",
-                x=0.5
-            ),
+            hovermode="x unified", template="plotly_white", margin=dict(l=0, r=0, t=10, b=0),
+            legend=dict(orientation="h", yanchor="top", y=-0.2, xanchor="center", x=0.5),
             yaxis=dict(ticksuffix="万", tickformat=",d", separatethousands=True)
         )
         st.plotly_chart(fig, use_container_width=True)
