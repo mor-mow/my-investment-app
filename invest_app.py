@@ -40,15 +40,16 @@ def dynamic_settings(label, prefix, default_val, is_rate=False, is_withdrawal=Fa
                                          key=f"{prefix}_m{i}")
             
             raw_v = get_p(f"{prefix}_v{i}", default_val)
-            min_a = current_age if i == 0 else res_list[i-1]["age"]
             
-            # --- 修正ポイント：入力フォームの出し分け ---
+            # --- エラー回避の核心：値のクランプ(範囲固定) ---
             if is_rate or (is_withdrawal and row_mode == "定率 (%)"):
-                val = col1.number_input(f"値 {i+1}", -15.0, 100.0, float(raw_v), 0.1, key=f"{prefix}_v{i}")
+                # 定率（最大100.0）の場合、過去の大きな金額（円）が入らないよう制限
+                safe_v = float(min(max(-15.0, float(raw_v)), 100.0))
+                val = col1.number_input(f"値 {i+1}", -15.0, 100.0, safe_v, 0.1, key=f"{prefix}_v{i}")
             else:
                 val = col1.number_input(f"円 {i+1}", 0, None, int(raw_v), 10000, key=f"{prefix}_v{i}")
             
-            # 終了年齢変更時のエラー回避のため min() を適用
+            min_a = current_age if i == 0 else res_list[i-1]["age"]
             raw_age = int(get_p(f"{prefix}_a{i}", min_a))
             age = col2.number_input(f"開始年齢 {i+1}", min_a, end_age, min(max(min_a, raw_age), end_age), key=f"{prefix}_a{i}")
             res_list.append({"val": val, "age": age, "mode": row_mode})
@@ -107,7 +108,6 @@ def run_simulation():
         if m_age >= first_wd_age:
             s_wd = get_setting(withdrawals_list)
             if float(s_wd["val"]) > 0:
-                # --- 修正ポイント：定率計算時の型エラー回避 ---
                 if s_wd["mode"] == "定額 (円)":
                     m_flow = -float(s_wd["val"])
                 else:
