@@ -38,12 +38,15 @@ def dynamic_settings(label, prefix, default_val, is_rate=False, is_withdrawal=Fa
                 row_mode = col1.selectbox(f"方法 {i+1}", ["定額 (円)", "定率 (%)"], 
                                          index=0 if str(get_p(f"{prefix}_m{i}", "定額 (円)")) == "定額 (円)" else 1, 
                                          key=f"{prefix}_m{i}")
+            
             raw_v = get_p(f"{prefix}_v{i}", default_val)
             min_a = current_age if i == 0 else res_list[i-1]["age"]
+            
             if is_rate or (is_withdrawal and row_mode == "定率 (%)"):
                 val = col1.number_input(f"値 {i+1}", -15.0, 100.0, float(raw_v), 0.1, key=f"{prefix}_v{i}")
             else:
                 val = col1.number_input(f"円 {i+1}", 0, None, int(raw_v), 10000, key=f"{prefix}_v{i}")
+            
             age = col2.number_input(f"開始年齢 {i+1}", min_a, end_age, int(min(max(min_a, get_p(f"{prefix}_a{i}", min_a)), end_age)), key=f"{prefix}_a{i}")
             res_list.append({"val": val, "age": age, "mode": row_mode})
         return res_list
@@ -63,16 +66,6 @@ with st.sidebar.expander("🏥 臨時収支の設定"):
         if v != 0: special_events.append({"val": v, "age": a})
 
 # --- 4. 計算ロジック ---
-def calculate_true_avg():
-    total_y = end_age - current_age
-    if total_y <= 0: return 0.0
-    w_sum = 0
-    for i, s in enumerate(rates_list):
-        start = s["age"]
-        nxt = rates_list[i+1]["age"] if i+1 < len(rates_list) else end_age
-        w_sum += s["val"] * max(0, nxt - start)
-    return w_sum / total_y
-
 def run_simulation():
     curr_bal = float(initial_sum)
     sim_genpon = float(initial_sum)
@@ -80,40 +73,48 @@ def run_simulation():
     total_months = (end_age - current_age) * 12
     event_dict = {int((e["age"] - current_age) * 12 + 1): e["val"] for e in special_events}
     
-    w_active_starts = [s["age"] for s in withdrawals_list if s["val"] > 0]
-    first_wd_age = min(w_active_starts) if w_active_starts else 999
-
     for m in range(1, total_months + 1):
-        m_age = current_age + ((m - 1) / 12)
+        # 月末時点の年齢（小数）
+        m_age = current_age + (m / 12)
+        
         def get_setting(s_list):
-            active = s_list
+            active = s_list[0]
             for s in s_list:
-                if m_age >= s["age"]: active = s
+                if (m_age - 0.01) >= s["age"]: active = s
             return active
 
-        curr_rate = get_setting(rates_list)["val"]
+        # 1. 運用利回りの適用（月利計算）
+        curr_rate = float(get_setting(rates_list)["val"])
+        curr_bal *= (1 + (curr_rate / 100) / 12)
+
+        # 2. 臨時収支
         ev_val = float(event_dict.get(m, 0))
         curr_bal += ev_val
         if ev_val > 0: sim_genpon += ev_val
 
-        m_flow, action = 0.0, "待機"
-        if m_age >= first_wd_age:
-            s_wd = get_setting(withdrawals_list)
-            if s_wd["val"] > 0:
-                m_flow = -float(s_wd["val"]) if s_wd["mode"] == "定額 (円)" else -(curr_bal * (s_wd["val"] / 100)) / 12
-                action = "取り崩し"
-        else:
-            s_dep = get_setting(deposits_list)
-            if m_age >= s_dep["age"]:
-                m_flow = float(s_dep["val"])
-                sim_genpon += m_flow
-                action = "積立"
+        # 3. 積立 or 取り崩しの計算
+        m_flow = 0.0
+        action = "維持"
         
+        s_dep = get_setting(deposits_list)
+        s_wd = get_setting(withdrawals_list)
+
+        # 取り崩し設定が有効(値が0より大きい)なら取り崩し優先、そうでなければ積立
+        if s_wd["val"] > 0 and (m_age - 0.01) >= s_wd["age"]:
+            if s_wd["mode"] == "定率 (%)":
+                m_flow = -(curr_bal * (float(s_wd["val"]) / 100) / 12)
+            else:
+                m_flow = -float(s_wd["val"])
+            action = "取り崩し"
+        elif s_dep["val"] > 0 and (m_age - 0.01) >= s_dep["age"]:
+            m_flow = float(s_dep["val"])
+            sim_genpon += m_flow
+            action = "積立"
+
         curr_bal = max(0.0, curr_bal + m_flow)
-        curr_bal *= (1 + (curr_rate / 100) / 12)
         
         log.append({
-            "年齢_グラフ": round(m_age + 1/12, 2), 
+            "年齢_グラフ": round(m_age, 2), 
             "年齢": int(m_age), 
             "月": f"{(m-1)%12+1}ヶ月目",
             "区分": action,
@@ -123,53 +124,48 @@ def run_simulation():
             "元本(万円)": int(sim_genpon / 10000)
         })
         if curr_bal <= 0 and action == "取り崩し": break
+
     return pd.DataFrame(log)
 
 # --- 5. 表示エリア ---
 df = run_simulation()
-avg_r = calculate_true_avg()
-is_empty = (initial_sum == 0 and not any(s["val"] > 0 for s in deposits_list) and not special_events)
 
-if is_empty:
+if (initial_sum == 0 and not any(s["val"] > 0 for s in deposits_list) and not special_events):
     st.info("👋 左メニューから「一括投資額」や「積立」を設定してください。")
-else:
-    if not df.empty:
-        last_row = df.iloc[-1]
-        c1, c2, c3 = st.columns(3)
-        c1.metric(f"{end_age}歳時点の資産", f"{int(last_row['資産(万円)']):,} 万円")
-        c2.metric("全体の平均年率", f"{avg_r:.2f} %")
-        c3.metric("投資元本合計", f"{int(last_row['元本(万円)']):,} 万円")
-        
-        if last_row['資産(万円)'] <= 0:
-            st.warning("⚠️ 資産の見直しが必要かもしれません")
-        else:
-            st.success("✅ 資産を維持できる見通しです")
+elif not df.empty:
+    last_row = df.iloc[-1]
+    c1, c2, c3 = st.columns(3)
+    c1.metric(f"{int(last_row['年齢'])}歳時点の資産", f"{int(last_row['資産(万円)']):,} 万円")
+    
+    # 平均利率の計算
+    total_y = end_age - current_age
+    avg_r = sum([s['val'] * 1 for s in rates_list]) / len(rates_list) if total_y > 0 else 0
+    c2.metric("設定年率(平均)", f"{avg_r:.2f} %")
+    c3.metric("投資元本合計", f"{int(last_row['元本(万円)']):,} 万円")
+    
+    if last_row['資産(万円)'] <= 0 and last_row['年齢'] < end_age:
+        st.warning(f"⚠️ {int(last_row['年齢'])}歳で資産が底をつきます。")
+    else:
+        st.success("✅ シミュレーション期間を完走しました。")
 
-        # グラフ
-        fig = go.Figure()
-        fig.add_trace(go.Scatter(x=df["年齢_グラフ"], y=df["資産(万円)"], name="資産残高", line=dict(color="#1f77b4", width=3), fill='tozeroy', fillcolor='rgba(31, 119, 180, 0.1)'))
-        fig.add_trace(go.Scatter(x=df["年齢_グラフ"], y=df["元本(万円)"], name="投資元本", line=dict(color="#ff7f0e", dash="dash")))
-        
-        fig.update_layout(
-            hovermode="x unified",
-            template="plotly_white",
-            margin=dict(l=0, r=0, t=10, b=0), # 上部の余白を詰め、凡例を下に配置
-            legend=dict(
-                orientation="h",       # 横並び
-                yanchor="top",         # 上端を基準に配置
-                y=-0.2,                # グラフの下側へ移動（マイナス値）
-                xanchor="center",      # 中央揃え
-                x=0.5
-            ),
-            yaxis=dict(ticksuffix="万", tickformat=",d", separatethousands=True)
-        )
-        st.plotly_chart(fig, use_container_width=True)
+    # グラフ描画
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(x=df["年齢_グラフ"], y=df["資産(万円)"], name="資産残高", line=dict(color="#1f77b4", width=3), fill='tozeroy', fillcolor='rgba(31, 119, 180, 0.1)'))
+    fig.add_trace(go.Scatter(x=df["年齢_グラフ"], y=df["元本(万円)"], name="投資元本", line=dict(color="#ff7f0e", dash="dash")))
+    
+    fig.update_layout(
+        hovermode="x unified", template="plotly_white",
+        margin=dict(l=0, r=0, t=10, b=0),
+        legend=dict(orientation="h", yanchor="top", y=-0.2, xanchor="center", x=0.5),
+        yaxis=dict(ticksuffix="万", tickformat=",d", separatethousands=True)
+    )
+    st.plotly_chart(fig, use_container_width=True)
 
-        with st.expander("📊 詳細データを確認する"):
-            st.dataframe(df[["年齢", "月", "区分", "月間収支", "臨時収支", "資産(万円)", "元本(万円)"]], 
-                         use_container_width=True, hide_index=True)
-        
-        st.download_button(label="📥 CSV保存", data=df.to_csv(index=False).encode('utf-8-sig'), file_name="asset_sim.csv", mime="text/csv")
+    with st.expander("📊 詳細データを確認する"):
+        st.dataframe(df[["年齢", "月", "区分", "月間収支", "臨時収支", "資産(万円)", "元本(万円)"]], 
+                     use_container_width=True, hide_index=True)
+    
+    st.download_button(label="📥 CSV保存", data=df.to_csv(index=False).encode('utf-8-sig'), file_name="asset_sim.csv", mime="text/csv")
 
-# URL同期
+# URL同期（最後に実行）
 st.query_params.update({k: v for k, v in st.session_state.items() if not str(k).startswith("FormSubmit")})
