@@ -8,6 +8,7 @@ st.markdown("### 📱 資産シミュレーター")
 
 # --- 2. 初期値取得ロジック ---
 def get_p(key, default):
+    # session_stateにある場合はそれを優先（ユーザー操作を即時反映）
     if key in st.session_state:
         return st.session_state[key]
     params = st.query_params
@@ -33,25 +34,29 @@ def dynamic_settings(label, prefix, default_val, is_rate=False, is_withdrawal=Fa
         for i in range(count):
             st.markdown(f"**第 {i+1} 段階**")
             col1, col2 = st.columns(2)
+            
             row_mode = "定額 (円)"
             if is_withdrawal:
+                m_key = f"{prefix}_m{i}"
                 row_mode = col1.selectbox(f"方法 {i+1}", ["定額 (円)", "定率 (%)"], 
-                                         index=0 if str(get_p(f"{prefix}_m{i}", "定額 (円)")) == "定額 (円)" else 1, 
-                                         key=f"{prefix}_m{i}")
+                                         index=0 if str(get_p(m_key, "定額 (円)")) == "定額 (円)" else 1, 
+                                         key=m_key)
             
-            raw_v = get_p(f"{prefix}_v{i}", default_val)
+            v_key = f"{prefix}_v{i}"
+            raw_v = get_p(v_key, default_val)
             
-            # --- エラー回避の核心：値のクランプ(範囲固定) ---
             if is_rate or (is_withdrawal and row_mode == "定率 (%)"):
-                # 定率（最大100.0）の場合、過去の大きな金額（円）が入らないよう制限
+                # 定率の場合、100を超えないようクランプ
                 safe_v = float(min(max(-15.0, float(raw_v)), 100.0))
-                val = col1.number_input(f"値 {i+1}", -15.0, 100.0, safe_v, 0.1, key=f"{prefix}_v{i}")
+                val = col1.number_input(f"値 {i+1}", -15.0, 100.0, safe_v, 0.1, key=v_key)
             else:
-                val = col1.number_input(f"円 {i+1}", 0, None, int(raw_v), 10000, key=f"{prefix}_v{i}")
+                val = col1.number_input(f"円 {i+1}", 0, None, int(raw_v), 10000, key=v_key)
             
+            a_key = f"{prefix}_a{i}"
             min_a = current_age if i == 0 else res_list[i-1]["age"]
-            raw_age = int(get_p(f"{prefix}_a{i}", min_a))
-            age = col2.number_input(f"開始年齢 {i+1}", min_a, end_age, min(max(min_a, raw_age), end_age), key=f"{prefix}_a{i}")
+            raw_age = int(get_p(a_key, min_a))
+            age = col2.number_input(f"開始年齢 {i+1}", min_a, end_age, min(max(min_a, raw_age), end_age), key=a_key)
+            
             res_list.append({"val": val, "age": age, "mode": row_mode})
         return res_list
 
@@ -75,6 +80,7 @@ def calculate_true_avg():
     total_y = end_age - current_age
     if total_y <= 0: return 0.0
     w_sum = 0.0
+    # 現在表示されている段階(rates_listの長さ)分だけで計算
     for i, s in enumerate(rates_list):
         start = s["age"]
         nxt = rates_list[i+1]["age"] if i+1 < len(rates_list) else end_age
@@ -88,15 +94,19 @@ def run_simulation():
     total_months = (end_age - current_age) * 12
     event_dict = {int((e["age"] - current_age) * 12 + 1): e["val"] for e in special_events}
     
+    # 有効な取り崩し開始年齢を現在のリストから取得
     w_active_starts = [s["age"] for s in withdrawals_list if float(s["val"]) > 0]
     first_wd_age = min(w_active_starts) if w_active_starts else 999
 
     for m in range(1, total_months + 1):
         m_age = current_age + ((m - 1) / 12)
+        
         def get_setting(s_list):
-            active = s_list
+            # 現在のループ年齢に合致する「最新の設定」を返す
+            active = s_list[0]
             for s in s_list:
-                if m_age >= s["age"]: active = s
+                if m_age >= s["age"]:
+                    active = s
             return active
 
         curr_rate = float(get_setting(rates_list)["val"])
@@ -139,9 +149,8 @@ def run_simulation():
 # --- 5. 表示エリア ---
 df = run_simulation()
 avg_r = calculate_true_avg()
-is_empty = (initial_sum == 0 and not any(s["val"] > 0 for s in deposits_list) and not special_events)
 
-if is_empty:
+if (initial_sum == 0 and not any(s["val"] > 0 for s in deposits_list) and not special_events):
     st.info("👋 左メニューから「一括投資額」や「積立」を設定してください。")
 else:
     if not df.empty:
@@ -156,15 +165,12 @@ else:
         else:
             st.success("✅ 資産を維持できる見通しです")
 
-        # グラフ
         fig = go.Figure()
         fig.add_trace(go.Scatter(x=df["年齢_グラフ"], y=df["資産(万円)"], name="資産残高", line=dict(color="#1f77b4", width=3), fill='tozeroy', fillcolor='rgba(31, 119, 180, 0.1)'))
         fig.add_trace(go.Scatter(x=df["年齢_グラフ"], y=df["元本(万円)"], name="投資元本", line=dict(color="#ff7f0e", dash="dash")))
         
         fig.update_layout(
-            hovermode="x unified",
-            template="plotly_white",
-            margin=dict(l=0, r=0, t=10, b=0),
+            hovermode="x unified", template="plotly_white", margin=dict(l=0, r=0, t=10, b=0),
             legend=dict(orientation="h", yanchor="top", y=-0.2, xanchor="center", x=0.5),
             yaxis=dict(ticksuffix="万", tickformat=",d", separatethousands=True)
         )
