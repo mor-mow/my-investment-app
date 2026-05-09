@@ -8,7 +8,6 @@ st.markdown("### 📱 資産シミュレーター")
 
 # --- 2. 初期値取得ロジック ---
 def get_p(key, default):
-    # クエリパラメータよりセッション状態（現在の入力）を優先
     if key in st.session_state:
         return st.session_state[key]
     params = st.query_params
@@ -41,20 +40,16 @@ def dynamic_settings(label, prefix, default_val, is_rate=False, is_withdrawal=Fa
                                          key=f"{prefix}_m{i}")
             
             raw_v = get_p(f"{prefix}_v{i}", default_val)
-            min_a = current_age if i == 0 else res_list[i-1]["age"]
-            
-            # 定率切り替え時のエラー防止
             if is_rate or (is_withdrawal and row_mode == "定率 (%)"):
                 safe_v = float(min(max(-15.0, float(raw_v)), 100.0))
                 val = col1.number_input(f"値 {i+1}", -15.0, 100.0, safe_v, 0.1, key=f"{prefix}_v{i}")
             else:
                 val = col1.number_input(f"円 {i+1}", 0, None, int(raw_v), 10000, key=f"{prefix}_v{i}")
             
+            min_a = current_age if i == 0 else res_list[i-1]["age"]
             raw_age = int(get_p(f"{prefix}_a{i}", min_a))
             age = col2.number_input(f"開始年齢 {i+1}", min_a, end_age, min(max(min_a, raw_age), end_age), key=f"{prefix}_a{i}")
             res_list.append({"val": val, "age": age, "mode": row_mode})
-        
-        # 重要な修正：現在のcount分だけのリストを返す（session_stateにゴミが残っていても無視する）
         return res_list
 
 deposits_list = dynamic_settings("💰 積立設定", "dep", 50000)
@@ -77,7 +72,6 @@ def calculate_true_avg():
     total_y = end_age - current_age
     if total_y <= 0: return 0.0
     w_sum = 0.0
-    # 現在のリスト(count分)のみをループ
     for i in range(len(rates_list)):
         s = rates_list[i]
         start = s["age"]
@@ -92,18 +86,19 @@ def run_simulation():
     total_months = (end_age - current_age) * 12
     event_dict = {int((e["age"] - current_age) * 12 + 1): e["val"] for e in special_events}
     
-    # リストにある値だけを使用
     w_active_starts = [s["age"] for s in withdrawals_list if float(s["val"]) > 0]
     first_wd_age = min(w_active_starts) if w_active_starts else 999
 
     for m in range(1, total_months + 1):
         m_age = current_age + ((m - 1) / 12)
         
+        # 修正箇所: リストの先頭要素を初期値とし、条件に合うものを順次上書きする
         def get_setting(s_list):
-            # リスト内の設定のみを評価
+            if not s_list: return {"val": 0, "age": 0, "mode": "定額 (円)"}
             active = s_list[0]
             for s in s_list:
-                if m_age >= s["age"]: active = s
+                if m_age >= s["age"]:
+                    active = s
             return active
 
         curr_rate = float(get_setting(rates_list)["val"])
@@ -146,9 +141,8 @@ def run_simulation():
 # --- 5. 表示エリア ---
 df = run_simulation()
 avg_r = calculate_true_avg()
-is_empty = (initial_sum == 0 and not any(s["val"] > 0 for s in deposits_list) and not special_events)
 
-if is_empty:
+if (initial_sum == 0 and not any(s["val"] > 0 for s in deposits_list) and not special_events):
     st.info("👋 左メニューから「一括投資額」や「積立」を設定してください。")
 else:
     if not df.empty:
@@ -158,12 +152,6 @@ else:
         c2.metric("全体の平均年率", f"{avg_r:.2f} %")
         c3.metric("投資元本合計", f"{int(last_row['元本(万円)']):,} 万円")
         
-        if last_row['資産(万円)'] <= 0:
-            st.warning("⚠️ 資産の見直しが必要かもしれません")
-        else:
-            st.success("✅ 資産を維持できる見通しです")
-
-        # グラフ
         fig = go.Figure()
         fig.add_trace(go.Scatter(x=df["年齢_グラフ"], y=df["資産(万円)"], name="資産残高", line=dict(color="#1f77b4", width=3), fill='tozeroy', fillcolor='rgba(31, 119, 180, 0.1)'))
         fig.add_trace(go.Scatter(x=df["年齢_グラフ"], y=df["元本(万円)"], name="投資元本", line=dict(color="#ff7f0e", dash="dash")))
