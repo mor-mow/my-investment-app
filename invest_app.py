@@ -86,30 +86,30 @@ def run_simulation():
     total_months = (end_age - current_age) * 12
     event_dict = {int((e["age"] - current_age) * 12 + 1): e["val"] for e in special_events}
     
-    # 取り崩しが「有効」な設定があるか確認
+    # 取り崩し開始判定
     w_active_starts = [s["age"] for s in withdrawals_list if float(s["val"]) > 0]
     first_wd_age = min(w_active_starts) if w_active_starts else 999
 
     for m in range(1, total_months + 1):
         m_age = current_age + ((m - 1) / 12)
         
-        # 修正：現在の年齢に応じた「単一の辞書設定」を確実に返すように修正
-        def get_setting(s_list):
-            if not s_list: return {"val": 0, "age": 0, "mode": "定額 (円)"}
-            active = s_list[0] # 初期値を1段階目に設定
-            for s in s_list:
-                if m_age >= s["age"]:
-                    active = s
-            return active
+        # --- 修正: インデックスを逆順に見て、条件を満たす最初の(最新の)設定を確実に取得 ---
+        def get_current_setting(target_list):
+            for setting in reversed(target_list):
+                if m_age >= setting["age"]:
+                    return setting
+            return target_list[0]
 
-        curr_rate = float(get_setting(rates_list)["val"])
+        s_rate = get_current_setting(rates_list)
+        curr_rate = float(s_rate["val"])
+        
         ev_val = float(event_dict.get(m, 0))
         curr_bal += ev_val
         if ev_val > 0: sim_genpon += ev_val
 
         m_flow, action = 0.0, "待機"
         if m_age >= first_wd_age:
-            s_wd = get_setting(withdrawals_list)
+            s_wd = get_current_setting(withdrawals_list)
             if float(s_wd["val"]) > 0:
                 if s_wd["mode"] == "定額 (円)":
                     m_flow = -float(s_wd["val"])
@@ -117,7 +117,7 @@ def run_simulation():
                     m_flow = -(curr_bal * (float(s_wd["val"]) / 100) / 12)
                 action = "取り崩し"
         else:
-            s_dep = get_setting(deposits_list)
+            s_dep = get_current_setting(deposits_list)
             if m_age >= s_dep["age"]:
                 m_flow = float(s_dep["val"])
                 sim_genpon += m_flow
