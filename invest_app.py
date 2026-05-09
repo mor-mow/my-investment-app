@@ -86,16 +86,17 @@ def run_simulation():
     total_months = (end_age - current_age) * 12
     event_dict = {int((e["age"] - current_age) * 12 + 1): e["val"] for e in special_events}
     
+    # 取り崩しが「有効」な設定があるか確認
     w_active_starts = [s["age"] for s in withdrawals_list if float(s["val"]) > 0]
     first_wd_age = min(w_active_starts) if w_active_starts else 999
 
     for m in range(1, total_months + 1):
         m_age = current_age + ((m - 1) / 12)
         
-        # 修正箇所: リストの先頭要素を初期値とし、条件に合うものを順次上書きする
+        # 修正：現在の年齢に応じた「単一の辞書設定」を確実に返すように修正
         def get_setting(s_list):
             if not s_list: return {"val": 0, "age": 0, "mode": "定額 (円)"}
-            active = s_list[0]
+            active = s_list[0] # 初期値を1段階目に設定
             for s in s_list:
                 if m_age >= s["age"]:
                     active = s
