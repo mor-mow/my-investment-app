@@ -71,13 +71,25 @@ with st.sidebar.expander("🏥 臨時収支の設定"):
         if v != 0: special_events.append({"val": v, "age": a})
 
 # --- 4. 計算ロジック ---
+def calculate_true_avg():
+    """全期間を通じた加重平均年率を計算"""
+    total_y = float(end_age - current_age)
+    if total_y <= 0: return 0.0
+    w_sum = 0.0
+    for i, s in enumerate(rates_list):
+        start = float(s["age"])
+        nxt = float(rates_list[i+1]["age"]) if i+1 < len(rates_list) else float(end_age)
+        w_sum += float(s["val"]) * max(0.0, nxt - start)
+    return w_sum / total_y
+
 def pick_setting(m_age, s_list):
-    """年齢に応じて適切な設定を抽出する(逆順ループで最新を適用)"""
-    current_s = s_list[0] if s_list else {"val": 0, "age": 0, "mode": "定額 (円)"}
+    """年齢に応じて適切な設定を抽出する"""
+    current_s = s_list if s_list else {"val": 0, "age": 0, "mode": "定額 (円)"}
+    # 後ろの設定から順にチェックし、条件を満たす最初のものを返す
     for s in reversed(s_list):
         if (m_age + 0.0001) >= s["age"]:
             return s
-    return current_s
+    return s_list
 
 def run_simulation():
     curr_bal = float(initial_sum)
@@ -92,17 +104,14 @@ def run_simulation():
     for m in range(1, total_months + 1):
         m_age = current_age + ((m - 1) / 12.0)
         
-        # 利回り設定の取得
         s_rate = pick_setting(m_age, rates_list)
         curr_rate = float(s_rate["val"])
         
-        # 臨時収支
         ev_val = float(event_dict.get(m, 0))
         curr_bal += ev_val
         if ev_val > 0: sim_genpon += ev_val
 
         m_flow, action = 0.0, "待機"
-        # 取り崩し vs 積立の判定
         if m_age >= (first_wd_age - 0.0001):
             s_wd = pick_setting(m_age, withdrawals_list)
             if float(s_wd["val"]) > 0:
@@ -136,29 +145,23 @@ def run_simulation():
 
 # --- 5. 表示エリア ---
 df = run_simulation()
+avg_r = calculate_true_avg()
 
 if not df.empty:
     last_row = df.iloc[-1]
     c1, c2, c3 = st.columns(3)
     c1.metric(f"{end_age}歳時点の資産", f"{int(last_row['資産(万円)']):,} 万円")
-    
-    # 平均利率計算
-    total_y = end_age - current_age
-    avg_r = sum([float(s["val"]) for s in rates_list]) / len(rates_list) if rates_list else 0
-    c2.metric("設定年率(平均)", f"{avg_r:.2f} %")
+    c2.metric("全体の平均年率", f"{avg_r:.2f} %")
     c3.metric("投資元本合計", f"{int(last_row['元本(万円)']):,} 万円")
 
-    # グラフ表示
     fig = go.Figure()
     fig.add_trace(go.Scatter(x=df["年齢_グラフ"], y=df["資産(万円)"], name="資産残高", line=dict(color="#1f77b4", width=3), fill='tozeroy', fillcolor='rgba(31, 119, 180, 0.1)'))
     fig.add_trace(go.Scatter(x=df["年齢_グラフ"], y=df["元本(万円)"], name="投資元本", line=dict(color="#ff7f0e", dash="dash")))
     fig.update_layout(hovermode="x unified", template="plotly_white", margin=dict(l=0, r=0, t=10, b=0), legend=dict(orientation="h", yanchor="top", y=-0.2, xanchor="center", x=0.5), yaxis=dict(ticksuffix="万", tickformat=",d"))
     st.plotly_chart(fig, use_container_width=True)
 
-    # 【復活】詳細データとダウンロードボタン
     with st.expander("📊 詳細データを確認する"):
-        st.dataframe(df[["年齢", "月", "区分", "月間収支", "臨時収支", "資産(万円)", "元本(万円)"]], 
-                     use_container_width=True, hide_index=True)
+        st.dataframe(df[["年齢", "月", "区分", "月間収支", "臨時収支", "資産(万円)", "元本(万円)"]], use_container_width=True, hide_index=True)
     
     st.download_button(label="📥 CSV保存", data=df.to_csv(index=False).encode('utf-8-sig'), file_name="asset_sim.csv", mime="text/csv")
 
